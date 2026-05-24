@@ -23,7 +23,7 @@ options=('!lto' '!debug')
 # Pacman should auto-remove the binary variant when switching to source.
 conflicts=('ai-usagebar-bin')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')  # pinned after CI auto-generates the tag tarball
+sha256sums=('d0de37f23b067c48aafc10fbd40ab0072849110f3280326eb51f516d35b9441e')
 
 prepare() {
     cd "$pkgname-$pkgver"
