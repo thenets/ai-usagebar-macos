@@ -1,0 +1,165 @@
+# Changelog
+
+All notable changes to **ai-usagebar** are recorded here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Each release is also published at
+<https://github.com/akitaonrails/ai-usagebar/releases>.
+
+## [Unreleased]
+
+Nothing yet.
+
+## [0.3.2] — 2026-05-23
+
+### Added
+
+- **Auto-signal waybar from Settings save** —
+  `settings::save_to_config_default()` now fires `SIGRTMIN+13` to any
+  running `waybar` process after a successful save, so widget modules
+  configured with `signal: 13` refresh their bar text immediately
+  instead of waiting up to 300 s for the next interval tick. No-op
+  when waybar isn't running.
+
+### Changed
+
+- **CI**: bumped `actions/checkout`, `actions/upload-artifact`, and
+  `actions/download-artifact` from v4 → v5 to silence Node 20
+  deprecation warnings ahead of GitHub forcing Node 24 in June 2026.
+- **README**: dropped the "future release" caveat on the manual
+  `pkill -SIGRTMIN+13 waybar` workaround (it's now automatic).
+- **README**: clarified that `ai-usagebar-tui` is a fully standalone
+  TUI requiring no Waybar / Hyprland / compositor dependencies — use
+  it from any terminal, including plain SSH sessions.
+- **README**: corrected the Hyprland floating-window snippet to use
+  the current `windowrule = …, match:class …` syntax (Hyprland 0.46+),
+  not the deprecated `windowrulev2`.
+
+## [0.3.1] — 2026-05-23
+
+### Added
+
+- **Cross-vendor placeholder aliases** —
+  every vendor's `build_placeholders()` now exposes `{session_pct}`,
+  `{session_reset}`, `{weekly_pct}`, `{weekly_reset}`, `{plan}` as
+  aliases to its primary metric. A single format string like
+  `'{vendor_short} {session_pct}% · {session_reset}'` now renders
+  correctly across all four vendors during scroll-cycle, instead of
+  showing literal `{session_pct}` text for OpenAI / Z.AI / OpenRouter
+  (which previously only exposed `{oai_session_*}` / `{zai_session_*}`
+  / `{or_*}` namespaced names).
+- For OpenRouter (no session/reset concept) the alias maps
+  `session_pct` → consumed-credit % and `session_reset` → `—`.
+
+### Fixed
+
+- **AUR `-debug` collision** —
+  `ai-usagebar-bin` now sets `options=('!strip' '!debug')`, suppressing
+  the auto-generated debug-info split. Without it the `-bin` variant's
+  auto-debug pkg fought over `/usr/lib/debug/usr/bin/ai-usagebar*.debug`
+  with an existing source-variant `ai-usagebar-debug`, preventing
+  swapping from source to bin without first manually removing the
+  orphan. The source PKGBUILD also adds `'!debug'` for symmetry, and
+  both PKGBUILDs now declare the cross-variant `conflicts` so pacman
+  auto-removes whichever is being replaced.
+
+## [0.3.0] — 2026-05-23
+
+### Added
+
+- **TUI Settings overlay** — press `s` from any tab to open a modal
+  that lets you pick the primary vendor (radio: anthropic / openai
+  / zai / openrouter) and set inline `ZAI_API_KEY` /
+  `OPENROUTER_API_KEY`. Keys are masked as you type; `Ctrl-V`
+  toggles reveal. `Ctrl-S` saves, `Esc` cancels.
+- **`toml_edit`-based config writes** preserve existing comments and
+  unrelated fields when the Settings overlay saves. The file is
+  automatically `chmod 600`ed so inline keys aren't world-readable.
+
+### Changed
+
+- **Panel layout**: panels now harmonize vertical space — added
+  spacer rows between OpenRouter / Z.AI sections so they don't clump
+  at the top, and the "Updated …" footer is pinned to the bottom of
+  every panel regardless of content height.
+
+## [0.2.0] — 2026-05-23
+
+### Added
+
+- **Config-driven primary vendor**: new `[ui] primary` field in
+  `config.toml` selects which vendor the widget shows when
+  `--vendor` is omitted and which TUI tab opens first.
+- **Inline API keys in config**: `zai.api_key` / `openrouter.api_key`
+  accept inline values for users who don't source secrets in their
+  shell. Resolution order: `api_key_env` → `api_key` → error with a
+  clear message naming both fallbacks.
+- **Scroll-to-cycle on the bar**: new `--cycle-next` / `--cycle-prev`
+  flags persist the active vendor to `~/.cache/ai-usagebar/active_vendor`
+  and signal waybar (`SIGRTMIN+13`) to refresh instantly. Wire to
+  `on-scroll-up` / `on-scroll-down` for a single bar item that cycles
+  through enabled vendors.
+- **`{vendor_short}` placeholder**: always expands to `cld` / `gpt`
+  / `zai` / `opr` so the bar can label which vendor is currently
+  shown when scroll-cycling.
+- **Native ratatui panels in the TUI**: replaced the
+  Pango-string-to-ratatui shim with native widgets (`Gauge`,
+  `Block`, `Paragraph`). Progress bars scale to the terminal width,
+  and all four vendor panels share a consistent layout.
+
+### Changed
+
+- **Widget `--vendor` is now optional** — defaults to `[ui] primary`
+  in config, falling back to `anthropic` only when nothing is set.
+- **Extracted duplicated tooltip helpers** (`Line`, `render_bordered`,
+  `pad_*`) from 4 vendor files into a shared `src/tooltip.rs`
+  (~70 LOC saved).
+
+### Fixed
+
+- **Live tests against real APIs continue to pass** — Z.AI's
+  undocumented `{type:"TIME_LIMIT"}` block parses correctly now
+  that we tolerate float `0.0` where integer was expected.
+
+### Security
+
+- New "Authentication" section in README documents the credential
+  resolution order and includes a `chmod 600` recommendation for
+  config files containing inline keys.
+
+## [0.1.0] — 2026-05-23
+
+Initial release. Drop-in replacement for
+[`claudebar`](https://github.com/mryll/claudebar) extended to four
+vendors. Highlights:
+
+- Per-vendor Waybar widget producing the same JSON shape as claudebar.
+- Tabbed TUI (`ai-usagebar-tui`) with one tab per enabled vendor.
+- Vendors supported:
+  - **Anthropic**: OAuth via `~/.claude/.credentials.json`,
+    `GET api.anthropic.com/api/oauth/usage`.
+  - **OpenAI**: OAuth via `~/.codex/auth.json`,
+    `GET chatgpt.com/backend-api/wham/usage` (same undocumented
+    endpoint the official Codex CLI uses).
+  - **Z.AI**: API key via `ZAI_API_KEY`,
+    `GET api.z.ai/api/monitor/usage/quota/limit`
+    (note: header `Authorization: <key>` with **no** `Bearer` prefix).
+  - **OpenRouter**: API key via `OPENROUTER_API_KEY`,
+    `GET openrouter.ai/api/v1/{credits,key}`.
+- Drop-in claudebar compatibility — same CLI flags
+  (`--icon`, `--format`, `--tooltip-format`, `--pace-tolerance`,
+  `--format-pace-color`, `--tooltip-pace-pts`, `--color-*`) and the
+  same `{placeholders}`.
+- Always exits 0 (Waybar hides modules that don't).
+- Atomic cache writes + `flock`-protected OAuth refresh — multi-monitor
+  Waybar instances coexist without API stampedes.
+- Live API smoke test suite (`make smoke`) that exercises the real
+  undocumented endpoints to detect schema drift before users do.
+
+[Unreleased]: https://github.com/akitaonrails/ai-usagebar/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.3.2
+[0.3.1]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.3.1
+[0.3.0]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.3.0
+[0.2.0]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.2.0
+[0.1.0]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.1.0

@@ -304,6 +304,10 @@ If your module doesn't use `signal: 13`, the signal is a no-op and the bar will 
 - Auto-merges with the active Omarchy theme at `~/.config/omarchy/current/theme/colors.toml`.
 - Per-color overrides: `--color-low`, `--color-mid`, `--color-high`, `--color-critical` (claudebar-compatible).
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the release history. Each release also has its own page at <https://github.com/akitaonrails/ai-usagebar/releases> with the auto-generated install snippet and checksum.
+
 ## Acknowledgements
 
 Direct reverse-engineering reference for the OpenAI and Anthropic OAuth endpoints came from [`claudebar`](https://github.com/mryll/claudebar) and [`codexbar`](https://github.com/mryll/codexbar) (both by mryll). The visual design — bordered Pango tooltip, severity colors, pacing math — is theirs; this project is a faithful Rust port plus multi-vendor extension.
