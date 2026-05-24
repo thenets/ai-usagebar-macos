@@ -1,36 +1,36 @@
 # ai-usagebar
 
-Waybar widget + tabbed TUI for AI plan usage across **Anthropic Claude**, **OpenAI Codex/ChatGPT**, **Z.AI (GLM)**, and **OpenRouter**.
+Waybar widget and tabbed TUI for AI plan usage across **Anthropic Claude**, **OpenAI Codex/ChatGPT**, **Z.AI (GLM)**, and **OpenRouter**.
 
-Rust port of [`claudebar`](https://github.com/mryll/claudebar) (drop-in compatible) extended to four vendors. Same minimalist Pango-bordered tooltip design, same Omarchy theme auto-detection, same flock-protected OAuth refresh — but tested, modular, and reliable instead of 865 lines of bash.
+This started as a Rust port of [`claudebar`](https://github.com/mryll/claudebar) and stays drop-in compatible with it. It keeps the minimalist Pango-bordered tooltip, Omarchy theme auto-detection, and flock-protected OAuth refresh, then adds three more vendors and a proper testable codebase instead of one long shell script.
 
 ![Waybar widget showing `cld 29% · 1h 12m` in the top-right, with the hover tooltip showing Claude Max 20x session/weekly/sonnet/extra-usage progress bars](screenshot.png)
 
 ## Features
 
-- **Per-vendor Waybar modules** — same JSON output shape as claudebar.
-- **Tabbed TUI** (`ai-usagebar-tui`) — interactive view with Tab/h/l switching, per-tab refresh, auto-refresh every 60s. Native ratatui widgets fill the available terminal width with consistent layout across vendors.
-- **Scroll-to-cycle on the bar** — wire `on-scroll-up` / `on-scroll-down` and a single bar item cycles through your enabled vendors.
-- **Config-driven primary vendor** — set `[ui] primary` once; the widget shows that vendor by default and the TUI opens on its tab.
-- **Local-testing UX** — `--pretty` renders ANSI-colored terminal output (auto-detects TTY); `--watch N` re-renders every N seconds.
-- **Drop-in claudebar compatibility** — all the same flags (`--icon`, `--format`, `--tooltip-format`, `--pace-tolerance`, `--format-pace-color`, `--tooltip-pace-pts`, `--color-*`) and `{placeholders}`.
-- **Always exits 0** — Waybar hides modules that don't.
-- **Atomic cache writes + flock** — multi-monitor Waybar instances coexist without API stampedes.
-- **Transient-vs-hard error split** — DNS/timeout failures show a quiet `Loading…`; HTTP 4xx/5xx surface the code in the tooltip.
-- **Live API smoke test suite** — `make smoke` hits the real (undocumented) endpoints to surface schema drift.
+- **Per-vendor Waybar modules** with the same JSON shape as claudebar.
+- **Tabbed TUI** (`ai-usagebar-tui`) with Tab/h/l switching, per-tab refresh, and 60-second auto-refresh. Native ratatui widgets fill the available terminal width and keep the vendor tabs visually consistent.
+- **Scroll-to-cycle on the bar**: wire `on-scroll-up` / `on-scroll-down`, and one bar item cycles through your enabled vendors.
+- **Config-driven primary vendor**: set `[ui] primary` once; the widget shows that vendor by default and the TUI opens on its tab.
+- **Local testing tools**: `--pretty` renders ANSI-colored terminal output (auto-detects TTY), and `--watch N` re-renders every N seconds.
+- **Drop-in claudebar compatibility** with the same flags (`--icon`, `--format`, `--tooltip-format`, `--pace-tolerance`, `--format-pace-color`, `--tooltip-pace-pts`, `--color-*`) and `{placeholders}`.
+- **Always exits 0**, because Waybar hides modules that don't.
+- **Atomic cache writes + flock**, so multi-monitor Waybar instances can coexist without API stampedes.
+- **Separate transient and hard errors**: DNS/timeout failures show a quiet `Loading…`; HTTP 4xx/5xx errors put the code in the tooltip.
+- **Live API smoke tests**: `make smoke` hits the real undocumented endpoints and catches schema drift early.
 
 ## Install
 
 ### Arch (AUR)
 
-Two packages — pick one:
+Two packages. Pick one:
 
 ```bash
 yay -S ai-usagebar-bin    # prebuilt binary from GitHub Releases (fast, ~5s install)
 yay -S ai-usagebar        # compiles from source (~30-60s, hermetic)
 ```
 
-The `-bin` variant downloads the same x86_64 ELF that CI built and tested; the source variant compiles locally with your toolchain. Both install identical binaries to `/usr/bin/`. If you already have one, switching is `yay -S` the other — pacman handles the swap via `conflicts`/`provides`.
+The `-bin` variant downloads the same x86_64 ELF that CI built and tested. The source variant compiles locally with your toolchain. Both install identical binaries to `/usr/bin/`. If you already have one installed, switch with `yay -S` the other package; pacman handles the swap through `conflicts`/`provides`.
 
 ### From source
 
@@ -43,7 +43,7 @@ make install PREFIX=$HOME/.local   # → ~/.local/bin
 
 ## Authentication
 
-Each vendor authenticates differently. Anthropic and OpenAI use OAuth credentials that their official CLIs already wrote to disk — **no env vars needed.** Z.AI and OpenRouter use API keys, which you can pass via env var OR (for users who don't source secrets in their shell) inline in `config.toml`.
+Each vendor authenticates a little differently. Anthropic and OpenAI use OAuth credentials that their official CLIs already wrote to disk, so **no env vars are needed.** Z.AI and OpenRouter use API keys. You can pass those through env vars or, if you don't source secrets in your shell, put them inline in `config.toml`.
 
 | Vendor | Method | Action required |
 |---|---|---|
@@ -123,19 +123,19 @@ The two binaries are independent. If you don't run Waybar (or just want to check
 ai-usagebar-tui                    # opens in your current terminal
 ```
 
-It runs in any terminal emulator (Kitty, Alacritty, Foot, Ghostty, etc.), works in plain SSH sessions, and doesn't need a compositor or any window manager features. All controls and the Settings overlay work the same way. Use it as:
+It runs in any terminal emulator (Kitty, Alacritty, Foot, Ghostty, etc.), works in plain SSH sessions, and doesn't need a compositor or window manager integration. All controls and the Settings overlay work the same way. Use it as:
 
 - An ad-hoc check ("am I close to my Claude weekly limit before I start a long session?")
-- A foreground monitor on a secondary screen / tmux pane while you code
+- A foreground monitor on a secondary screen or tmux pane while you code
 - A shell-only tool on remote machines (just install the binary; no Waybar/Hyprland dependencies)
 
-The Waybar widget is purely an *optional* always-on-screen surface. The TUI is the canonical way to see all four vendors at once, regardless of whether you ever set up the widget.
+The Waybar widget is optional. The TUI is the best way to see all four vendors at once, even if you never set up the widget.
 
 ## Waybar config
 
 ### Single module, scroll-to-cycle (recommended)
 
-One bar item that you can scroll through to cycle vendors. The TUI on-click shows them all:
+Use one bar item and scroll through your vendors. The TUI on-click still shows them all:
 
 ```jsonc
 "modules-right": ["custom/aibar", ...],
@@ -152,7 +152,7 @@ One bar item that you can scroll through to cycle vendors. The TUI on-click show
 }
 ```
 
-The `{vendor_short}` placeholder always expands to a 3-letter vendor ID (`cld` / `gpt` / `zai` / `opr`) so the bar text tells you which vendor is currently cycled. The other usage placeholders (`{session_pct}` for Anthropic, `{oai_session_pct}` for OpenAI, etc.) are vendor-specific — to use one format string that works for all four cycled vendors, prefer the generic versions where available (currently `{session_pct}` works for Anthropic only; the other vendors expose their own `{oai_*}` / `{zai_*}` / `{or_*}` families that fall through to empty for vendors that don't define them).
+The `{vendor_short}` placeholder always expands to a 3-letter vendor ID (`cld` / `gpt` / `zai` / `opr`), so the bar text tells you which vendor is active. The other usage placeholders (`{session_pct}` for Anthropic, `{oai_session_pct}` for OpenAI, etc.) are vendor-specific. If you want one format string for all four cycled vendors, prefer the generic placeholders where available. For now, `{session_pct}` works for Anthropic only; the other vendors expose their own `{oai_*}` / `{zai_*}` / `{or_*}` families, which expand to empty strings for vendors that don't define them.
 
 `signal: 13` lets the scroll-cycle commands refresh the bar instantly (via `SIGRTMIN+13`) instead of waiting for the next 300s interval.
 
@@ -194,7 +194,7 @@ If you'd rather see them all at once:
 
 ## Hyprland: float the TUI window
 
-By default Hyprland tiles the TUI. To make `ai-usagebar-tui` open as a centered floating window — the same way Omarchy floats its own settings TUIs (Wi-Fi/`impala`, audio/`wiremix`, Bluetooth/`bluetui`) — add this to `~/.config/hypr/hyprland.conf` (or any sourced `.conf`, e.g. `looknfeel.conf`):
+By default Hyprland tiles the TUI. To make `ai-usagebar-tui` open as a centered floating window, the same way Omarchy floats its own settings TUIs (Wi-Fi/`impala`, audio/`wiremix`, Bluetooth/`bluetui`), add this to `~/.config/hypr/hyprland.conf` or any sourced `.conf`, such as `looknfeel.conf`:
 
 ```ini
 # ai-usagebar TUI — float + center + fixed size. omarchy-launch-tui sets the
@@ -207,7 +207,7 @@ windowrule = size 875 600, match:class ^(org\.omarchy\.ai-usagebar-tui)$
 
 Then `hyprctl reload` (no logout needed).
 
-> Omarchy itself tags a hardcoded list of TUI app-ids with `floating-window` in `~/.local/share/omarchy/default/hypr/apps/system.conf` (which then applies `float + center + size 875 600`). We set the three rules directly instead of relying on that tag, so the size is deterministic regardless of which config is sourced first. If you launch the TUI differently (e.g. `kitty -e ai-usagebar-tui`) replace the class regex with whatever `hyprctl clients` reports for your terminal.
+> Omarchy tags a hardcoded list of TUI app-ids with `floating-window` in `~/.local/share/omarchy/default/hypr/apps/system.conf`, which then applies `float + center + size 875 600`. The rules above set those values directly, so the size is deterministic regardless of which config is sourced first. If you launch the TUI differently (e.g. `kitty -e ai-usagebar-tui`), replace the class regex with whatever `hyprctl clients` reports for your terminal.
 
 > Hyprland 0.46+ uses the unified `windowrule` keyword with `match:…` filters. The older `windowrulev2 = …, class:…` syntax still works on legacy Hyprland but is deprecated — use the form above on current Omarchy / Hyprland releases.
 
@@ -222,9 +222,9 @@ Then `hyprctl reload` (no logout needed).
 
 ### Endpoint stability
 
-Three of the four endpoints are undocumented. The Anthropic and OpenAI endpoints are used by their respective official CLIs (`claude` and `codex`) — disappearing them would break those tools too, so they're more durable than scraped web endpoints. Z.AI's monitor endpoint is reverse-engineered from a third-party plugin; treat it as the most fragile.
+Three of the four endpoints are undocumented. The Anthropic and OpenAI endpoints are used by their official CLIs (`claude` and `codex`), so removing them would break those tools too. That makes them less shaky than scraped web endpoints. Z.AI's monitor endpoint is reverse-engineered from a third-party plugin; treat it as the most fragile one.
 
-When an endpoint drifts, **run `make smoke`** — the live API tests check the exact fields we depend on and produce a precise failure pointing at what changed. Paste the failure back into Claude Code and the affected `types.rs` can be updated mechanically.
+When an endpoint drifts, **run `make smoke`**. The live API tests check the exact fields this project depends on and produce a precise failure pointing at what changed. Paste the failure back into Claude Code and the affected `types.rs` can usually be updated mechanically.
 
 ## Format placeholders
 
@@ -274,7 +274,7 @@ make clippy                                        # cargo clippy -D warnings
 - `s` — open Settings overlay (primary vendor + API keys)
 - `q` / `Esc` / `Ctrl-C` — quit
 
-Auto-refresh runs every 60 seconds in the background. Different vendors render with consistent layout — here's OpenRouter showing the credit balance gauge (red because 98% consumed), usage-by-period totals, and tier:
+Auto-refresh runs every 60 seconds in the background. Vendors use the same layout. Here's OpenRouter showing the credit balance gauge (red because 98% is consumed), usage-by-period totals, and tier:
 
 ![ai-usagebar-tui showing the OpenRouter tab — Credit balance gauge at 98% in red ($13.67 left of $900), Usage by period with today/week/month, paid tier](screenshots/tui-openrouter.png)
 
@@ -285,7 +285,7 @@ Auto-refresh runs every 60 seconds in the background. Different vendors render w
 Press `s` while the TUI is open. The overlay lets you:
 
 - Pick the **primary vendor** that the widget defaults to and that the TUI selects on startup. Use `←` / `→` to cycle.
-- Enter your **Z.AI API key** and **OpenRouter API key** inline. Keys are masked as you type; press `Ctrl-V` to reveal/hide. Env vars (`ZAI_API_KEY`, `OPENROUTER_API_KEY`) still win at runtime if they're set — the inline key is the fallback.
+- Enter your **Z.AI API key** and **OpenRouter API key** inline. Keys are masked as you type; press `Ctrl-V` to reveal or hide them. Env vars (`ZAI_API_KEY`, `OPENROUTER_API_KEY`) still win at runtime if they're set; the inline key is the fallback.
 
 Key bindings inside the overlay:
 
@@ -297,7 +297,7 @@ Key bindings inside the overlay:
 
 Save writes to `~/.config/ai-usagebar/config.toml` via `toml_edit` so your existing comments and unrelated fields are preserved. The file is automatically `chmod 600`ed on save, so inline keys aren't world-readable.
 
-After save, the Settings overlay automatically fires `SIGRTMIN+13` so any Waybar module configured with `signal: 13` refreshes immediately — no need to wait for the next 300s interval tick or kick the bar by hand. The TUI's own tabs also re-fetch right away so a freshly-set API key takes effect on the spot.
+After save, the Settings overlay fires `SIGRTMIN+13` so any Waybar module configured with `signal: 13` refreshes immediately. You don't need to wait for the next 300-second interval or kick the bar by hand. The TUI's own tabs also re-fetch right away, so a freshly set API key takes effect on the spot.
 
 If your module doesn't use `signal: 13`, the signal is a no-op and the bar will refresh on its next normal tick (up to `interval` seconds away). To force-refresh manually: `pkill -SIGUSR2 waybar` (full reload).
 
@@ -313,7 +313,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the release history. Each release also has 
 
 ## Acknowledgements
 
-Direct reverse-engineering reference for the OpenAI and Anthropic OAuth endpoints came from [`claudebar`](https://github.com/mryll/claudebar) and [`codexbar`](https://github.com/mryll/codexbar) (both by mryll). The visual design — bordered Pango tooltip, severity colors, pacing math — is theirs; this project is a faithful Rust port plus multi-vendor extension.
+The OpenAI and Anthropic OAuth endpoint references came from [`claudebar`](https://github.com/mryll/claudebar) and [`codexbar`](https://github.com/mryll/codexbar), both by mryll. The visual design, including the bordered Pango tooltip, severity colors, and pacing math, is theirs. This project is a Rust port with multi-vendor support.
 
 ## License
 
