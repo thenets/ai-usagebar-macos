@@ -62,11 +62,7 @@ impl App {
     /// isn't in `vendors` (e.g. it was disabled).
     pub fn new_with_primary(vendors: Vec<VendorId>, primary: Option<VendorId>) -> Self {
         let mut app = Self::new(vendors);
-        if let Some(p) = primary {
-            if let Some(idx) = app.vendors.iter().position(|v| *v == p) {
-                app.active = idx;
-            }
-        }
+        app.select_primary(primary);
         app
     }
 

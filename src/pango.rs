@@ -74,10 +74,7 @@ pub fn severity_color(sev: PaceSeverity, theme: &Theme) -> &str {
 pub fn progress_bar(pct: i32, fill_color: &str, theme: &Theme, marker_pct: Option<i32>) -> String {
     let pct = pct.clamp(0, 100) as u32;
     let bar_len = BAR_LEN;
-    let mut filled = (pct * bar_len) / 100;
-    if filled > bar_len {
-        filled = bar_len;
-    }
+    let filled = (pct * bar_len) / 100;
 
     let Some(marker) = marker_pct.map(|p| p.clamp(0, 100) as u32) else {
         // Simple two-segment bar.

@@ -44,15 +44,8 @@ fn accent(theme: &crate::theme::Theme) -> Color {
 }
 
 fn parse_hex(s: &str) -> Option<Color> {
-    let s = s.strip_prefix('#').unwrap_or(s);
-    if s.len() != 6 {
-        return None;
-    }
-    Some(Color::Rgb(
-        u8::from_str_radix(&s[0..2], 16).ok()?,
-        u8::from_str_radix(&s[2..4], 16).ok()?,
-        u8::from_str_radix(&s[4..6], 16).ok()?,
-    ))
+    let (r, g, b) = crate::theme::parse_hex_rgb(s)?;
+    Some(Color::Rgb(r, g, b))
 }
 
 fn draw_tabs(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {

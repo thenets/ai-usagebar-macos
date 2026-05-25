@@ -60,7 +60,7 @@ fn apply_tag(tag: &str, out: &mut String) {
     let bold = tag.contains("font_weight='bold'") || tag.contains("font_weight=\"bold\"");
     let color = extract_attr(tag, "foreground");
 
-    if let Some(hex) = color.as_deref().and_then(parse_hex_color) {
+    if let Some(hex) = color.as_deref().and_then(crate::theme::parse_hex_rgb) {
         let (r, g, b) = hex;
         out.push_str(&format!("\x1b[38;2;{r};{g};{b}m"));
     }
@@ -82,18 +82,6 @@ fn extract_attr(tag: &str, key: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn parse_hex_color(s: &str) -> Option<(u8, u8, u8)> {
-    let s = s.strip_prefix('#').unwrap_or(s);
-    if s.len() != 6 {
-        return None;
-    }
-    Some((
-        u8::from_str_radix(&s[0..2], 16).ok()?,
-        u8::from_str_radix(&s[2..4], 16).ok()?,
-        u8::from_str_radix(&s[4..6], 16).ok()?,
-    ))
 }
 
 #[cfg(test)]

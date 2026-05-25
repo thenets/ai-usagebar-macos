@@ -161,8 +161,8 @@ fn omarchy_theme_path() -> Option<PathBuf> {
 /// either input isn't parseable. Mirrors claudebar's `hex_blend()`
 /// (claudebar:105-110).
 pub fn hex_blend(a: &str, b: &str) -> Option<String> {
-    let (ar, ag, ab) = parse_hex(a)?;
-    let (br, bg, bb) = parse_hex(b)?;
+    let (ar, ag, ab) = parse_hex_rgb(a)?;
+    let (br, bg, bb) = parse_hex_rgb(b)?;
     Some(format!(
         "#{:02x}{:02x}{:02x}",
         (u16::from(ar) + u16::from(br)) / 2,
@@ -171,15 +171,29 @@ pub fn hex_blend(a: &str, b: &str) -> Option<String> {
     ))
 }
 
-fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
+pub(crate) fn parse_hex_rgb(s: &str) -> Option<(u8, u8, u8)> {
     let s = s.strip_prefix('#').unwrap_or(s);
-    if s.len() != 6 {
+    let [r1, r2, g1, g2, b1, b2] = s.as_bytes() else {
         return None;
+    };
+    Some((
+        hex_pair(*r1, *r2)?,
+        hex_pair(*g1, *g2)?,
+        hex_pair(*b1, *b2)?,
+    ))
+}
+
+fn hex_pair(hi: u8, lo: u8) -> Option<u8> {
+    Some((hex_nibble(hi)? << 4) | hex_nibble(lo)?)
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
     }
-    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-    Some((r, g, b))
 }
 
 #[cfg(test)]
@@ -209,6 +223,7 @@ mod tests {
         assert_eq!(hex_blend("not-hex", "#000000"), None);
         assert_eq!(hex_blend("#fff", "#000000"), None); // 3-digit not supported (claudebar parity)
         assert_eq!(hex_blend("#xxxxxx", "#000000"), None);
+        assert_eq!(hex_blend("aéabc", "#000000"), None);
     }
 
     #[test]

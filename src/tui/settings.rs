@@ -405,7 +405,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &SettingsState, theme: &Theme) {
         chunks[0],
     );
     f.render_widget(
-        Paragraph::new(render_radio(&state.primary, fg, accent, dim)),
+        Paragraph::new(render_radio(&state.primary, accent, dim)),
         chunks[1],
     );
 
@@ -494,7 +494,7 @@ fn label(text: &str, focused: bool, fg: Color, accent: Color) -> Line<'static> {
     Line::from(Span::styled(format!("  {text}"), style))
 }
 
-fn render_radio(selected: &VendorId, fg: Color, accent: Color, dim: Color) -> Line<'static> {
+fn render_radio(selected: &VendorId, accent: Color, dim: Color) -> Line<'static> {
     let mut spans = vec![Span::raw("    ")];
     for v in VendorId::all() {
         let is_sel = v == selected;
@@ -508,7 +508,6 @@ fn render_radio(selected: &VendorId, fg: Color, accent: Color, dim: Color) -> Li
             format!("{glyph} {}  ", vendor_label(*v)),
             style,
         ));
-        let _ = fg;
     }
     Line::from(spans)
 }
@@ -546,7 +545,6 @@ fn render_input(
     } else {
         String::new()
     };
-    let _ = fg;
     Line::from(vec![
         Span::styled(format!("    {body}"), box_style),
         Span::styled(format!("{suffix}{cursor_hint}"), suffix_style),
@@ -554,15 +552,8 @@ fn render_input(
 }
 
 fn parse_hex(s: &str) -> Option<Color> {
-    let s = s.strip_prefix('#').unwrap_or(s);
-    if s.len() != 6 {
-        return None;
-    }
-    Some(Color::Rgb(
-        u8::from_str_radix(&s[0..2], 16).ok()?,
-        u8::from_str_radix(&s[2..4], 16).ok()?,
-        u8::from_str_radix(&s[4..6], 16).ok()?,
-    ))
+    let (r, g, b) = crate::theme::parse_hex_rgb(s)?;
+    Some(Color::Rgb(r, g, b))
 }
 
 /// Center a rectangle of `percent_x * percent_y` over `r`.
