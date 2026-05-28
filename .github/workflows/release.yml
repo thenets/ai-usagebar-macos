@@ -167,3 +167,38 @@ jobs:
               --notes-file body.md \
               --latest
           fi
+
+  publish-crates-io:
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.ref != ''
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::warning::Skipping crates.io publish — no CARGO_REGISTRY_TOKEN secret set"
+            exit 0
+          fi
+          log="${RUNNER_TEMP:-/tmp}/cargo-publish.log"
+          set +e
+          cargo publish 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          # Idempotent re-runs: if the version is already on crates.io
+          # (e.g. workflow_dispatch fired against an old tag), skip
+          # quietly instead of failing the workflow.
+          if grep -q "crate ai-usagebar@.* already exists on crates.io index" "$log"; then
+            echo "::warning::Skipping crates.io publish — ${GITHUB_REF_NAME#v} already exists"
+            exit 0
+          fi
+          exit "$status"

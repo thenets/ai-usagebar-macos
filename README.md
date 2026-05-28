@@ -32,6 +32,15 @@ yay -S ai-usagebar        # compiles from source (~30-60s, hermetic)
 
 The `-bin` variant downloads the same x86_64 ELF that CI built and tested. The source variant compiles locally with your toolchain. Both install identical binaries to `/usr/bin/`. If you already have one installed, switch with `yay -S` the other package; pacman handles the swap through `conflicts`/`provides`.
 
+### Other Linux / macOS (crates.io)
+
+```bash
+cargo install ai-usagebar                # compile from source (needs rustup)
+cargo binstall ai-usagebar               # download prebuilt binary (needs cargo-binstall, no rustup)
+```
+
+`cargo binstall` fetches the same x86_64 / aarch64 Linux tarball the AUR `-bin` package uses. Both install `ai-usagebar` + `ai-usagebar-tui` to `~/.cargo/bin/`.
+
 ### From source
 
 ```bash

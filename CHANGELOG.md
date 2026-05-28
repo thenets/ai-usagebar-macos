@@ -11,6 +11,34 @@ Each release is also published at
 
 Nothing yet.
 
+## [0.4.3] — 2026-05-28
+
+### Added
+
+- **Published to crates.io** — `cargo install ai-usagebar` works on
+  any Linux/macOS box with rustup, no Arch / AUR required. Both
+  binaries (`ai-usagebar`, `ai-usagebar-tui`) land in `~/.cargo/bin`.
+- **`cargo binstall ai-usagebar` support** — if you have
+  [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), it
+  fetches the prebuilt binary from the matching GitHub Release
+  (x86_64 or aarch64 Linux) instead of compiling. Same artifact the
+  `ai-usagebar-bin` AUR package uses, just without yay. Metadata in
+  `[package.metadata.binstall]`.
+
+### Changed
+
+- **Cargo.toml metadata** filled in: `repository`, `homepage`,
+  `documentation`, `keywords`, `categories`, `readme` — so the
+  crates.io listing has a proper sidebar.
+- **`exclude`** added to `[package]` so screenshots (~6 MiB) and
+  AUR packaging files aren't shipped in the published crate
+  tarball. Crate size went from 6.6 MiB compressed to 118 KiB.
+- **CI**: new `publish-crates-io` job in `.github/workflows/release.yml`
+  runs `cargo publish` after the binary build + GitHub release
+  succeed. Skips gracefully when `CARGO_REGISTRY_TOKEN` isn't set
+  or when the version is already on crates.io (idempotent for
+  workflow-dispatch re-runs).
+
 ## [0.4.2] — 2026-05-28
 
 ### Changed
@@ -234,7 +262,8 @@ vendors. Highlights:
 - Live API smoke test suite (`make smoke`) that exercises the real
   undocumented endpoints to detect schema drift before users do.
 
-[Unreleased]: https://github.com/akitaonrails/ai-usagebar/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/akitaonrails/ai-usagebar/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.4.3
 [0.4.2]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.4.2
 [0.4.1]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.4.1
 [0.4.0]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.4.0

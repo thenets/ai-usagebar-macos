@@ -1,10 +1,35 @@
 [package]
 name = "ai-usagebar"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 rust-version = "1.86"
 license = "MIT"
 description = "Waybar widget + TUI for AI plan usage across Anthropic, OpenAI, Z.AI, and OpenRouter"
+readme = "README.md"
+repository = "https://github.com/akitaonrails/ai-usagebar"
+homepage = "https://github.com/akitaonrails/ai-usagebar"
+documentation = "https://github.com/akitaonrails/ai-usagebar#readme"
+keywords = ["waybar", "claude", "openai", "tui", "usage"]
+categories = ["command-line-utilities"]
+
+# Don't ship screenshots (~6 MiB of the package!) or AUR packaging files
+# in the crates.io tarball — they're for the GitHub README and AUR builds,
+# not for consumers of the crate or its binaries.
+exclude = [
+    "screenshot.png",
+    "screenshots/*",
+    "packaging/*",
+    ".github/*",
+    ".claude/*",
+]
+
+# cargo-binstall metadata: tells `cargo binstall ai-usagebar` how to find the
+# prebuilt binaries already published in each GitHub Release, so users without
+# rustup don't need to compile from source.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/ai-usagebar-linux-{ target-arch }.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
 
 [lib]
 name = "ai_usagebar"
