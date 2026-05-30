@@ -82,7 +82,7 @@ On macOS, recent Claude Code builds don't write `~/.claude/.credentials.json` �
 
 ## Configuration
 
-`~/.config/ai-usagebar/config.toml` (optional — defaults enable all four OAuth/env-key vendors). Full example:
+`~/.config/ai-usagebar/config.toml` (optional — defaults enable Anthropic, OpenAI, Z.AI, and OpenRouter; DeepSeek is opt-in). Full example:
 
 ```toml
 [ui]
@@ -149,7 +149,7 @@ It runs in any terminal emulator (Kitty, Alacritty, Foot, Ghostty, etc.), works 
 - A foreground monitor on a secondary screen or tmux pane while you code
 - A shell-only tool on remote machines (just install the binary; no Waybar/Hyprland dependencies)
 
-The Waybar widget is optional. The TUI is the best way to see all four vendors at once, even if you never set up the widget.
+The Waybar widget is optional. The TUI is the best way to see every enabled vendor at once, even if you never set up the widget.
 
 ## Waybar config
 
@@ -172,7 +172,7 @@ Use one bar item and scroll through your vendors. The TUI on-click still shows t
 }
 ```
 
-The `{vendor_short}` placeholder always expands to a 3-letter vendor ID (`cld` / `gpt` / `zai` / `opr`), so the bar text tells you which vendor is active. The other usage placeholders (`{session_pct}` for Anthropic, `{oai_session_pct}` for OpenAI, etc.) are vendor-specific. If you want one format string for all four cycled vendors, prefer the generic placeholders where available. For now, `{session_pct}` works for Anthropic only; the other vendors expose their own `{oai_*}` / `{zai_*}` / `{or_*}` families, which expand to empty strings for vendors that don't define them.
+The `{vendor_short}` placeholder always expands to a 3-letter vendor ID (`cld` / `gpt` / `zai` / `opr` / `dsk`), so the bar text tells you which vendor is active. The other usage placeholders (`{session_pct}` for Anthropic, `{oai_session_pct}` for OpenAI, etc.) are vendor-specific. If you want one format string for every cycled vendor, prefer the generic placeholders where available. For now, `{session_pct}` works for Anthropic only; the other vendors expose their own `{oai_*}` / `{zai_*}` / `{or_*}` / `{ds_*}` families, which expand to empty strings for vendors that don't define them.
 
 `signal: 13` lets the scroll-cycle commands refresh the bar instantly (via `SIGRTMIN+13`) instead of waiting for the next 300s interval.
 
@@ -181,7 +181,7 @@ The `{vendor_short}` placeholder always expands to a 3-letter vendor ID (`cld` /
 If you'd rather see them all at once:
 
 ```jsonc
-"modules-right": ["custom/claude", "custom/openai", "custom/openrouter", "custom/zai"],
+"modules-right": ["custom/claude", "custom/openai", "custom/openrouter", "custom/zai", "custom/deepseek"],
 
 "custom/claude": {
     "exec": "ai-usagebar --vendor anthropic --icon '󰚩'",
@@ -206,6 +206,12 @@ If you'd rather see them all at once:
     "exec": "ai-usagebar --vendor zai --icon '󰚩'",
     "return-type": "json",
     "interval": 300,
+    "tooltip": true
+},
+"custom/deepseek": {
+    "exec": "ai-usagebar --vendor deepseek --icon '󰧑'",
+    "return-type": "json",
+    "interval": 600,
     "tooltip": true
 }
 ```
@@ -270,6 +276,10 @@ When an endpoint drifts, **run `make smoke`**. The live API tests check the exac
 ### OpenRouter
 
 `{or_label}`, `{or_balance}`, `{or_total}`, `{or_used}`, `{or_used_today}`, `{or_used_week}`, `{or_used_month}`, `{or_consumed_pct}`, `{or_free_tier}`, `{or_limit}`, `{or_limit_remaining}`, `{or_balance_bar}`
+
+### DeepSeek
+
+`{ds_balance}`, `{ds_granted}`, `{ds_topped_up}`, `{ds_available}` — credit balance from `/user/balance`. USD is preferred when both currencies are present; falls back to CNY otherwise.
 
 ## Local development
 
