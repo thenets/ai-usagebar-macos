@@ -56,7 +56,7 @@ Each vendor authenticates a little differently. Anthropic and OpenAI use OAuth c
 
 | Vendor | Method | Action required |
 |---|---|---|
-| Anthropic | OAuth, read from `~/.claude/.credentials.json` | Run `claude` once to log in. Token auto-refreshes. |
+| Anthropic | OAuth, read from `~/.claude/.credentials.json` (or the macOS login Keychain — see below) | Run `claude` once to log in. Token auto-refreshes. |
 | OpenAI | OAuth, read from `~/.codex/auth.json` | Run `codex login` once. Token auto-refreshes. |
 | Z.AI | API key (`ZAI_API_KEY` env or `[zai] api_key` in config) | Set either. |
 | OpenRouter | API key (`OPENROUTER_API_KEY` env or `[openrouter] api_key` in config) | Set either. |
@@ -74,6 +74,10 @@ For each API-key vendor, ai-usagebar checks in this order:
 - If you put inline `api_key` values in config, `chmod 600 ~/.config/ai-usagebar/config.toml`. The default behavior reads only env vars, which is safer when your config might be world-readable.
 - Don't commit your config dir if you check it into dotfiles unless you've redacted `api_key` lines.
 - OAuth credential files (`~/.claude/.credentials.json`, `~/.codex/auth.json`) are managed by their respective CLIs and already chmod-protected.
+
+#### macOS: Anthropic credentials in the Keychain
+
+On macOS, recent Claude Code builds don't write `~/.claude/.credentials.json` — they keep the same OAuth JSON in the **login Keychain** under the generic-password service `Claude Code-credentials`. ai-usagebar detects the missing file and transparently reads (and writes refreshed tokens back to) that Keychain item via the built-in `security` tool, so no manual step is needed. If the file *does* exist it still takes precedence, matching Linux.
 
 ## Configuration
 

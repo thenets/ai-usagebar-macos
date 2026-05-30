@@ -1,5 +1,9 @@
 //! Read and write `~/.claude/.credentials.json` — the OAuth state the Claude
 //! CLI maintains. Mirrors claudebar:330-333 (read) and claudebar:447-452 (write).
+//!
+//! On macOS the file often doesn't exist: recent Claude Code builds keep the
+//! same JSON in the login Keychain instead. When the file is absent we transom
+//! over to [`keychain`] so subscription usage works there too.
 
 use std::path::{Path, PathBuf};
 
@@ -7,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::cache::atomic_write;
 use crate::error::{AppError, Result};
+
+#[cfg(target_os = "macos")]
+use super::keychain;
 
 /// Disk shape (matches claudebar's jq paths).
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -99,36 +106,64 @@ pub fn default_path() -> Result<PathBuf> {
 }
 
 pub fn read_from(path: &Path) -> Result<CredentialsFile> {
-    let raw = std::fs::read_to_string(path).map_err(|e| AppError::io_at(path, e))?;
-    serde_json::from_str(&raw).map_err(|e| {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => parse(&raw, &path.display().to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // No file — on macOS the credentials usually live in the Keychain.
+            #[cfg(target_os = "macos")]
+            if let Some(raw) = keychain::read_raw()? {
+                return parse(&raw, "macOS Keychain (Claude Code-credentials)");
+            }
+            Err(AppError::io_at(path, e))
+        }
+        Err(e) => Err(AppError::io_at(path, e)),
+    }
+}
+
+/// Parse a credentials JSON blob from any source (`source` only labels errors).
+fn parse(raw: &str, source: &str) -> Result<CredentialsFile> {
+    serde_json::from_str(raw).map_err(|e| {
         AppError::Credentials(format!(
-            "could not parse {}: {e}. Run `claude` to re-authenticate.",
-            path.display()
+            "could not parse {source}: {e}. Run `claude` to re-authenticate."
         ))
     })
 }
 
-/// Persist updated credentials, preserving any unknown top-level fields the
-/// Claude CLI might have added. Reads the existing file, merges our updates
-/// into the `claudeAiOauth` object, and atomically writes it back.
-pub fn write_back(path: &Path, new_oauth: &OauthCreds) -> Result<()> {
-    let mut doc: serde_json::Value = std::fs::read_to_string(path)
-        .map_err(|e| AppError::io_at(path, e))
-        .and_then(|s| serde_json::from_str(&s).map_err(AppError::Json))
-        .unwrap_or_else(|_| serde_json::json!({}));
-
-    let obj = match doc.as_object_mut() {
-        Some(o) => o,
-        None => {
-            doc = serde_json::json!({});
-            doc.as_object_mut().expect("just constructed object")
-        }
-    };
-    obj.insert(
+/// Merge a refreshed `claudeAiOauth` into an existing credentials document
+/// (or a fresh `{}`), preserving any unknown top-level fields the Claude CLI
+/// keeps there (e.g. `mcpOAuth`). Pure so the merge is unit-testable without
+/// touching disk or the Keychain.
+fn merge_oauth(existing: Option<&str>, new_oauth: &OauthCreds) -> Result<serde_json::Value> {
+    let mut doc: serde_json::Value = existing
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !doc.is_object() {
+        doc = serde_json::json!({});
+    }
+    doc.as_object_mut().expect("just ensured object").insert(
         "claudeAiOauth".into(),
         serde_json::to_value(new_oauth).map_err(AppError::Json)?,
     );
+    Ok(doc)
+}
 
+/// Persist updated credentials, preserving any unknown top-level fields the
+/// Claude CLI might have added. Writes back to wherever the creds actually
+/// live: the file if present, otherwise (macOS) the Keychain item — keeping a
+/// single shared source of truth with Claude Code instead of forking a stale
+/// copy and rotating the refresh token out from under it.
+pub fn write_back(path: &Path, new_oauth: &OauthCreds) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if !path.exists() {
+        if let Some(existing) = keychain::read_raw()? {
+            let doc = merge_oauth(Some(&existing), new_oauth)?;
+            let json = serde_json::to_string(&doc).map_err(AppError::Json)?;
+            return keychain::write_raw(&json);
+        }
+    }
+
+    let existing = std::fs::read_to_string(path).ok();
+    let doc = merge_oauth(existing.as_deref(), new_oauth)?;
     let bytes = serde_json::to_vec_pretty(&doc).map_err(AppError::Json)?;
     atomic_write(path, &bytes)
 }
@@ -218,6 +253,54 @@ mod tests {
         let f = write_creds("not json");
         let err = read_from(f.path()).unwrap_err();
         assert!(matches!(err, AppError::Credentials(_)));
+    }
+
+    // Linux-only: a missing file with no Keychain fallback is an I/O error,
+    // not a parse error. Gated off macOS so we never read the developer's real
+    // Keychain item (which would both flake and surface a live token).
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn read_from_missing_file_is_io_error() {
+        let path = std::path::Path::new("/nonexistent/ai-usagebar/.credentials.json");
+        let err = read_from(path).unwrap_err();
+        assert!(matches!(err, AppError::Io { .. }));
+    }
+
+    #[test]
+    fn merge_oauth_preserves_unknown_top_level_fields() {
+        let existing = r#"{"claudeAiOauth":{"accessToken":"OLD"},"mcpOAuth":{"x":1}}"#;
+        let new_oauth = OauthCreds {
+            access_token: "NEW".into(),
+            refresh_token: "RT".into(),
+            expires_at_ms: 99,
+            subscription_type: "max".into(),
+            rate_limit_tier: "".into(),
+            scopes: None,
+        };
+        let doc = merge_oauth(Some(existing), &new_oauth).unwrap();
+        assert_eq!(doc["mcpOAuth"]["x"], 1);
+        assert_eq!(doc["claudeAiOauth"]["accessToken"], "NEW");
+        assert_eq!(doc["claudeAiOauth"]["expiresAt"], 99);
+    }
+
+    #[test]
+    fn merge_oauth_handles_empty_and_non_object_input() {
+        let new_oauth = OauthCreds {
+            access_token: "A".into(),
+            refresh_token: "R".into(),
+            expires_at_ms: 0,
+            subscription_type: "pro".into(),
+            rate_limit_tier: "".into(),
+            scopes: None,
+        };
+        // None → fresh object.
+        let doc = merge_oauth(None, &new_oauth).unwrap();
+        assert_eq!(doc["claudeAiOauth"]["accessToken"], "A");
+        // Garbage / non-object → discarded, fresh object.
+        let doc = merge_oauth(Some("not json"), &new_oauth).unwrap();
+        assert_eq!(doc["claudeAiOauth"]["accessToken"], "A");
+        let doc = merge_oauth(Some("[1,2,3]"), &new_oauth).unwrap();
+        assert_eq!(doc["claudeAiOauth"]["accessToken"], "A");
     }
 
     #[test]

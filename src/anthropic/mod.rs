@@ -6,6 +6,8 @@
 
 pub mod creds;
 pub mod fetch;
+#[cfg(target_os = "macos")]
+pub mod keychain;
 pub mod oauth;
 pub mod types;
 

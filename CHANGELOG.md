@@ -9,7 +9,17 @@ Each release is also published at
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **macOS Keychain fallback for Anthropic credentials.** Recent Claude
+  Code builds on macOS store their OAuth state in the login Keychain
+  (generic-password service `Claude Code-credentials`) instead of
+  `~/.claude/.credentials.json`, so the widget failed with an I/O error
+  on a missing file. When the file is absent on macOS, ai-usagebar now
+  reads the same `{ claudeAiOauth, mcpOAuth }` JSON from the Keychain
+  via `security(1)`, and writes refreshed tokens back to that same item
+  so it keeps a single source of truth with Claude Code instead of
+  forking a stale copy. Linux behavior is unchanged.
 
 ## [0.4.5] — 2026-05-28
 
