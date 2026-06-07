@@ -9,7 +9,18 @@ Each release is also published at
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **AUR source install no longer fails for users with a customized
+  `active_vendor`.** The PKGBUILD's `check()` runs `cargo test --release`
+  against the building user's real `$HOME`, so a planted
+  `~/.cache/ai-usagebar/active_vendor` (e.g. set by widget scroll-cycle to
+  any non-default vendor) flipped two unit tests via the documented
+  vendor-precedence rule #2 and aborted the build. Tests now exercise
+  vendor precedence + TUI theme resolution through hermetic seams
+  (`Cli::resolve_vendor_with`, `active::cycle_at`/`read_from`/`write_to`,
+  `App::with_theme`) and never read real `$HOME` / `$XDG` paths. Production
+  behaviour is unchanged (thanks @sombraSoft).
 
 ## [0.5.1] — 2026-06-01
 
