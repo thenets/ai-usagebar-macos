@@ -33,10 +33,13 @@ pub struct Tokens {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Default location: `~/.codex/auth.json`.
+/// Default location: `~/.codex/auth.json` (Unix/macOS) or
+/// `%USERPROFILE%\.codex\auth.json` (Windows).
+///
+/// Home is resolved through [`crate::cache::home_dir`] so every platform's
+/// convention is honored in one place.
 pub fn default_path() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").ok_or_else(|| AppError::Other("HOME not set".into()))?;
-    Ok(PathBuf::from(home).join(".codex/auth.json"))
+    Ok(crate::cache::home_dir()?.join(".codex").join("auth.json"))
 }
 
 pub fn read_from(path: &Path) -> Result<AuthFile> {
@@ -98,13 +101,23 @@ fn parse_jwt_claims(token: &str) -> Option<serde_json::Value> {
 mod tests {
     use super::*;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     fn write_auth(s: &str) -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(s.as_bytes()).unwrap();
         f.flush().unwrap();
         f
+    }
+
+    /// Like `write_auth`, but writes to a named file inside a `TempDir` and
+    /// closes the handle, so `write_back`'s atomic rename-over-destination
+    /// succeeds on Windows (which refuses to replace a still-open file).
+    fn write_auth_closed(s: &str) -> (TempDir, std::path::PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.json");
+        std::fs::write(&path, s).unwrap();
+        (dir, path)
     }
 
     /// Build a fake JWT with the given claims (no signature verification).
@@ -170,14 +183,43 @@ mod tests {
             r#"{{"tokens":{{"access_token":"AT","refresh_token":"RT","id_token":"{jwt}"}},
                 "some_other_field":"keep-me"}}"#
         );
-        let f = write_auth(&body);
-        let mut auth = read_from(f.path()).unwrap();
+        let (_dir, path) = write_auth_closed(&body);
+        let mut auth = read_from(&path).unwrap();
         auth.tokens.access_token = "NEW".into();
-        write_back(f.path(), &auth).unwrap();
+        write_back(&path, &auth).unwrap();
 
         let v: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(f.path()).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["some_other_field"], "keep-me");
         assert_eq!(v["tokens"]["access_token"], "NEW");
+    }
+
+    #[test]
+    fn default_path_ends_with_codex_auth() {
+        let p = default_path().unwrap();
+        // Trailing segments are stable across platforms; only the home prefix
+        // differs (resolved by directories::BaseDirs).
+        assert!(p.ends_with(std::path::Path::new(".codex").join("auth.json")));
+    }
+
+    // On Windows the home prefix is %USERPROFILE%, not $HOME.
+    #[cfg(windows)]
+    #[test]
+    fn default_path_uses_userprofile_on_windows() {
+        let p = default_path().unwrap();
+        let userprofile = std::env::var("USERPROFILE").expect("USERPROFILE set on Windows");
+        // directories::BaseDirs resolves the home via SHGetKnownFolderPath, which
+        // can differ from %USERPROFILE% in casing or path separator. Compare on a
+        // normalized basis (lowercased, backslashes) rather than Path::starts_with,
+        // which compares components case-sensitively even on Windows.
+        let norm = |s: &str| s.to_lowercase().replace('/', "\\");
+        let p_norm = norm(&p.to_string_lossy());
+        let up_norm = norm(&userprofile);
+        assert!(
+            p_norm.starts_with(up_norm.as_str()),
+            "{} should live under {}",
+            p.display(),
+            userprofile
+        );
     }
 }

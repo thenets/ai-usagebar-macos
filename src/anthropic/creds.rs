@@ -99,10 +99,15 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
-/// Default location: `~/.claude/.credentials.json`.
+/// Default location: `~/.claude/.credentials.json` (Unix/macOS) or
+/// `%USERPROFILE%\.claude\.credentials.json` (Windows).
+///
+/// Home is resolved through [`crate::cache::home_dir`] so every platform's
+/// convention is honored in one place.
 pub fn default_path() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").ok_or_else(|| AppError::Other("HOME not set".into()))?;
-    Ok(PathBuf::from(home).join(".claude/.credentials.json"))
+    Ok(crate::cache::home_dir()?
+        .join(".claude")
+        .join(".credentials.json"))
 }
 
 pub fn read_from(path: &Path) -> Result<CredentialsFile> {
@@ -172,13 +177,25 @@ pub fn write_back(path: &Path, new_oauth: &OauthCreds) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     fn write_creds(s: &str) -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(s.as_bytes()).unwrap();
         f.flush().unwrap();
         f
+    }
+
+    /// Like `write_creds`, but writes to a named file inside a `TempDir` and
+    /// closes the handle. `write_back` rewrites the file via an atomic
+    /// rename-over-destination, which on Windows fails if the destination is
+    /// still open (as a live `NamedTempFile` handle would be). Returns the dir
+    /// (kept alive by the caller) and the closed file's path.
+    fn write_creds_closed(s: &str) -> (TempDir, std::path::PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("credentials.json");
+        std::fs::write(&path, s).unwrap();
+        (dir, path)
     }
 
     #[test]
@@ -267,6 +284,36 @@ mod tests {
     }
 
     #[test]
+    fn default_path_ends_with_claude_credentials() {
+        let p = default_path().unwrap();
+        // The trailing two segments are stable across platforms; only the home
+        // prefix differs (resolved by directories::BaseDirs).
+        assert!(p.ends_with(std::path::Path::new(".claude").join(".credentials.json")));
+    }
+
+    // On Windows the home prefix is %USERPROFILE%, not $HOME — assert the
+    // resolver honors it so the credential file is found natively.
+    #[cfg(windows)]
+    #[test]
+    fn default_path_uses_userprofile_on_windows() {
+        let p = default_path().unwrap();
+        let userprofile = std::env::var("USERPROFILE").expect("USERPROFILE set on Windows");
+        // directories::BaseDirs resolves the home via SHGetKnownFolderPath, which
+        // can differ from %USERPROFILE% in casing or path separator. Compare on a
+        // normalized basis (lowercased, backslashes) rather than Path::starts_with,
+        // which compares components case-sensitively even on Windows.
+        let norm = |s: &str| s.to_lowercase().replace('/', "\\");
+        let p_norm = norm(&p.to_string_lossy());
+        let up_norm = norm(&userprofile);
+        assert!(
+            p_norm.starts_with(up_norm.as_str()),
+            "{} should live under {}",
+            p.display(),
+            userprofile
+        );
+    }
+
+    #[test]
     fn merge_oauth_preserves_unknown_top_level_fields() {
         let existing = r#"{"claudeAiOauth":{"accessToken":"OLD"},"mcpOAuth":{"x":1}}"#;
         let new_oauth = OauthCreds {
@@ -305,13 +352,13 @@ mod tests {
 
     #[test]
     fn write_back_round_trips_and_preserves_unknown_fields() {
-        let f = write_creds(
+        let (_dir, path) = write_creds_closed(
             r#"{"claudeAiOauth":{
                 "accessToken":"OLD","refreshToken":"OLD","expiresAt": 0,
                 "subscriptionType":"pro","rateLimitTier":""
             },"someOtherField":"keep me"}"#,
         );
-        let creds = read_from(f.path()).unwrap();
+        let creds = read_from(&path).unwrap();
         let new_oauth = OauthCreds {
             access_token: "NEW".into(),
             refresh_token: "NEW_RT".into(),
@@ -320,9 +367,9 @@ mod tests {
             rate_limit_tier: "".into(),
             scopes: creds.claude_ai_oauth.scopes.clone(),
         };
-        write_back(f.path(), &new_oauth).unwrap();
+        write_back(&path, &new_oauth).unwrap();
         // Re-read & verify the unknown field survived.
-        let raw = std::fs::read_to_string(f.path()).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(v["someOtherField"], "keep me");
         assert_eq!(v["claudeAiOauth"]["accessToken"], "NEW");

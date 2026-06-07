@@ -92,6 +92,11 @@ patch version instead.
   `Theme::merged_with_omarchy_file` not `merged_with_omarchy`,
   `Cli::resolve_vendor_with` not `resolved_vendor`, `App::with_theme`
   not `new`. Live API tests stay behind `#[ignore]` (see `tests/live.rs`).
+  *Carve-out:* a test that asserts the path *resolver itself* honors the
+  OS convention may read the env var it's testing (e.g. the Windows-gated
+  `default_path_uses_userprofile_on_windows` reads `%USERPROFILE%`) —
+  USERPROFILE is the production input being verified, not ambient state
+  the test is incidentally coupled to.
 
 ## Secret-discipline rules (learned the hard way)
 
@@ -131,6 +136,11 @@ vendor's response shape drifts:
   `~/.claude/.credentials.json` is absent (Claude Code on macOS stores
   the OAuth blob in the login Keychain). Module-gated with
   `#[cfg(target_os = "macos")]`; Linux build never compiles it.
+- `src/cache.rs` — atomic per-vendor cache writes + flock, plus the shared
+  cross-platform path resolvers (`xdg_cache_dir`, `home_dir`). `home_dir`
+  resolves `$HOME` / `%USERPROFILE%` via `directories::BaseDirs` and is reused
+  by both OAuth-credential vendors (`anthropic`, `openai`) so the OS convention
+  lives in one place.
 - `src/tui/settings.rs` — Settings overlay (toml_edit-backed,
   auto-signals waybar after save)
 - `src/tui/panels.rs` — native ratatui per-vendor panels
