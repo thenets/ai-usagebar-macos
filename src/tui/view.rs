@@ -2,7 +2,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui_bubbletea_components::{Help, KeyBinding, ListItem, SelectList};
 
@@ -46,6 +46,16 @@ fn vendor_label(id: VendorId) -> &'static str {
     }
 }
 
+fn compact_vendor_label(id: VendorId) -> &'static str {
+    match id {
+        VendorId::Anthropic => "Claude",
+        VendorId::Openai => "OpenAI",
+        VendorId::Zai => "Z.AI",
+        VendorId::Openrouter => "OpenRouter",
+        VendorId::Deepseek => "DeepSeek",
+    }
+}
+
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let theme = bubble_theme(&app.theme);
     let block = theme.titled_block(" ai-usagebar ");
@@ -74,12 +84,11 @@ fn draw_main(f: &mut Frame, app: &App, area: Rect) {
         draw_sidebar(f, app, chunks[0]);
         draw_detail(f, app, chunks[1]);
     } else {
-        let sidebar_height = (app.vendors.len() as u16 + 2).min(8);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(sidebar_height), Constraint::Min(1)])
+            .constraints([Constraint::Length(3), Constraint::Min(1)])
             .split(area);
-        draw_sidebar(f, app, chunks[0]);
+        draw_top_nav(f, app, chunks[0]);
         draw_detail(f, app, chunks[1]);
     }
 }
@@ -103,6 +112,34 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let mut list = SelectList::new(items).theme(theme);
     list.select(Some(app.active));
     f.render_widget(&list, inner);
+}
+
+fn draw_top_nav(f: &mut Frame, app: &App, area: Rect) {
+    let theme = bubble_theme(&app.theme);
+    let block = theme
+        .titled_block(" vendors ")
+        .border_style(theme.focused_border);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut spans = vec![theme.muted(" ")];
+    for (index, vendor) in app.vendors.iter().enumerate() {
+        if index > 0 {
+            spans.push(theme.muted("  "));
+        }
+        let selected = index == app.active;
+        let marker = if selected {
+            theme.symbols.selected
+        } else {
+            theme.symbols.bullet
+        };
+        let marker_style = if selected { theme.accent } else { theme.muted };
+        let label_style = if selected { theme.selected } else { theme.text };
+        spans.push(Span::styled(marker, marker_style));
+        spans.push(theme.span(" "));
+        spans.push(Span::styled(compact_vendor_label(*vendor), label_style));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), inner);
 }
 
 fn draw_detail(f: &mut Frame, app: &App, area: Rect) {

@@ -11,6 +11,13 @@ Each release is also published at
 
 Nothing yet.
 
+## [0.7.1] — 2026-06-08
+
+### Changed
+
+- TUI narrow layouts now render the vendor picker as a compact horizontal row
+  above the detail panel instead of keeping the wide-layout vertical sidebar.
+
 ## [0.7.0] — 2026-06-08
 
 ### Changed
@@ -373,7 +380,8 @@ vendors. Highlights:
 - Live API smoke test suite (`make smoke`) that exercises the real
   undocumented endpoints to detect schema drift before users do.
 
-[Unreleased]: https://github.com/akitaonrails/ai-usagebar/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/akitaonrails/ai-usagebar/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.7.1
 [0.7.0]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.7.0
 [0.6.0]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.6.0
 [0.5.1]: https://github.com/akitaonrails/ai-usagebar/releases/tag/v0.5.1
