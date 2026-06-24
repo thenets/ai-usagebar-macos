@@ -18,9 +18,8 @@ use super::types::UsageResponse;
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const USAGE_BETA_HEADER: &str = "oauth-2025-04-20";
 /// The usage endpoint rate-limits hard unless the request carries a Claude Code
-/// `User-Agent`. A bare `claude-code/<version>` is what the official client and
-/// the community monitors send; the exact patch version is not validated, so a
-/// stable recent value is fine and avoids hammering a build-time lookup.
+/// `User-Agent`. The exact patch version isn't validated, so a stable recent
+/// `claude-code/<version>` (what the official client sends) is fine.
 pub const USAGE_USER_AGENT: &str = "claude-code/2.1.183";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(25);
@@ -250,11 +249,8 @@ async fn fetch_usage(client: &reqwest::Client, url: &str, creds: &OauthCreds) ->
         .get(url)
         .header("Authorization", format!("Bearer {}", creds.access_token))
         .header("anthropic-beta", USAGE_BETA_HEADER)
-        // The endpoint gates on a Claude Code `User-Agent`: without it you hit
-        // an aggressively rate-limited bucket (429). With it, this plain GET +
-        // these four headers returns 200 — verified against the live endpoint.
-        // (Adding `x-app`/`anthropic-version` is unnecessary and only widens the
-        // surface for the endpoint to reject; keep the request minimal.)
+        // These four headers are exactly what the endpoint accepts — the
+        // `User-Agent` is load-bearing (without it the endpoint 429s hard).
         .header("User-Agent", USAGE_USER_AGENT)
         .header("Content-Type", "application/json")
         .send()
@@ -435,12 +431,9 @@ mod tests {
 
     #[tokio::test]
     async fn empty_refresh_token_skips_refresh_and_reuses_cache_silently() {
-        // Token is expired but there's no refresh token to refresh with. The
-        // widget must NOT POST an empty grant (→ 400 "Invalid request format")
-        // nor poison `.last_error`; it should silently reuse the good cache.
+        // Expired token, empty refresh token. `.expect(0)` is the assertion: an
+        // empty grant must never be POSTed (it would 400 and poison the cache).
         let mut server = mockito::Server::new_async().await;
-        // If refresh is (wrongly) attempted, this 400 mock would fire and the
-        // assertion on last_error below would catch it.
         let m = server
             .mock("POST", "/v1/oauth/token")
             .with_status(400)
@@ -475,7 +468,6 @@ mod tests {
         .await
         .unwrap();
 
-        // Reused the cached snapshot, marked stale, and wrote NO last_error.
         assert!(outcome.stale);
         assert_eq!(outcome.snapshot.session.utilization_pct, 17);
         assert!(
