@@ -77,8 +77,6 @@ pub async fn fetch_snapshot(
     }
 
     // Maybe refresh.
-    let mut auth_ok = true;
-    let mut refresh_transient = false;
     let now = Utc::now().timestamp();
     let stale_token = oauth::needs_refresh(creds.claude_ai_oauth.expires_at_secs(), now);
     let have_refresh = oauth::can_refresh(&creds.claude_ai_oauth.refresh_token);
@@ -86,11 +84,11 @@ pub async fn fetch_snapshot(
         // No refresh token to refresh with — the Claude Code client owns token
         // rotation (trusted-device flow) and leaves `refreshToken` empty. Don't
         // POST an empty grant (the token endpoint answers 400 "Invalid request
-        // format" and we'd cache a zeroed snapshot). Treat as transient: reuse
-        // the last good cache silently and let the live client refresh the
-        // shared credential out from under us on its own cadence.
-        refresh_transient = true;
-        auth_ok = false;
+        // format" and we'd cache a zeroed snapshot). Also clear any stale
+        // token-endpoint error from older builds, then continue with the current
+        // access token: only the real usage request decides whether to fall
+        // back to cache.
+        cache.clear_last_error();
     } else if stale_token {
         match tokio::time::timeout(
             REFRESH_TIMEOUT,
@@ -114,26 +112,20 @@ pub async fn fetch_snapshot(
                 let _ = creds::write_back(creds_path, &creds.claude_ai_oauth);
             }
             Ok(Err(AppError::Http { status, body })) => {
-                auth_ok = false;
                 cache.write_last_error(status, &body);
+                return handle_auth_failure(cache, plan_label, false);
             }
             Ok(Err(e)) if e.is_transient() => {
-                auth_ok = false;
-                refresh_transient = true;
+                return handle_auth_failure(cache, plan_label, true);
             }
             Ok(Err(e)) => {
-                auth_ok = false;
                 cache.write_last_error(0, &e.to_string());
+                return handle_auth_failure(cache, plan_label, false);
             }
             Err(_elapsed) => {
-                auth_ok = false;
-                refresh_transient = true;
+                return handle_auth_failure(cache, plan_label, true);
             }
         }
-    }
-
-    if !auth_ok {
-        return handle_auth_failure(cache, plan_label, refresh_transient);
     }
 
     // Fetch usage.
@@ -430,17 +422,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_refresh_token_skips_refresh_and_reuses_cache_silently() {
+    async fn empty_refresh_token_skips_refresh_and_fetches_usage() {
         // Expired token, empty refresh token. `.expect(0)` is the assertion: an
         // empty grant must never be POSTed (it would 400 and poison the cache).
         let mut server = mockito::Server::new_async().await;
-        let m = server
+        let refresh = server
             .mock("POST", "/v1/oauth/token")
             .with_status(400)
             .with_body(
                 r#"{"error":{"type":"invalid_request_error","message":"Invalid request format"}}"#,
             )
             .expect(0)
+            .create_async()
+            .await;
+        let usage = server
+            .mock("GET", "/api/oauth/usage")
+            .match_header("authorization", "Bearer AT")
+            .match_header("user-agent", USAGE_USER_AGENT)
+            .match_header("anthropic-beta", USAGE_BETA_HEADER)
+            .with_status(200)
+            .with_body(
+                r#"{"five_hour":{"utilization":61,"resets_at":"2026-06-25T17:30:00Z"},
+                    "seven_day":{"utilization":31,"resets_at":"2026-06-26T12:00:00Z"}}"#,
+            )
             .create_async()
             .await;
 
@@ -468,14 +472,59 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(outcome.stale);
-        assert_eq!(outcome.snapshot.session.utilization_pct, 17);
+        assert!(!outcome.stale);
+        assert_eq!(outcome.snapshot.session.utilization_pct, 61);
         assert!(
             outcome.last_error.is_none(),
             "empty-refresh path must not poison .last_error, got {:?}",
             outcome.last_error
         );
-        m.assert_async().await; // refresh endpoint was never called
+        refresh.assert_async().await; // refresh endpoint was never called
+        usage.assert_async().await; // usage endpoint was still called
+    }
+
+    #[tokio::test]
+    async fn empty_refresh_token_clears_old_last_error_on_transient_fallback() {
+        let mut server = mockito::Server::new_async().await;
+        let refresh = server
+            .mock("POST", "/v1/oauth/token")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let (_td, cache) = cache_fixture();
+        cache
+            .write_payload(
+                br#"{"five_hour":{"utilization":17,"resets_at":"2026-06-25T17:30:00Z"},
+                     "seven_day":{"utilization":77,"resets_at":"2026-06-26T12:00:00Z"}}"#,
+            )
+            .unwrap();
+        cache.write_last_error(400, "Invalid request format");
+
+        let creds = expired_creds_no_refresh();
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(200))
+            .build()
+            .unwrap();
+        let endpoints = Endpoints {
+            usage: "http://127.0.0.1:1/api/oauth/usage".into(),
+            token: format!("{}/v1/oauth/token", server.url()),
+        };
+        let outcome = fetch_snapshot(
+            &client,
+            creds.path(),
+            &cache,
+            &endpoints,
+            Duration::from_secs(0),
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.stale);
+        assert_eq!(outcome.snapshot.session.utilization_pct, 17);
+        assert!(outcome.last_error.is_none());
+        assert!(cache.read_last_error().is_none());
+        refresh.assert_async().await;
     }
 
     #[tokio::test]

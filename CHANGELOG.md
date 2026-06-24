@@ -18,9 +18,10 @@ Each release is also published at
   token expired, the widget POSTed that empty string as a `refresh_token` grant,
   the token endpoint answered `400 "Invalid request format"`, and the bar cached
   a zeroed snapshot — `0%` on session/weekly/sonnet with an `HTTP 400` tooltip.
-  The fetch now skips the refresh when no refresh token is present and silently
-  reuses the last good cache (letting the live client refresh the shared
-  credential on its own cadence). The usage request was also trimmed to the four
+  The fetch now skips the refresh when no refresh token is present, clears any
+  stale token-endpoint error from older builds, and still attempts the usage
+  request with the current access token before deciding whether to fall back to
+  cache. The usage request was also trimmed to the four
   headers the live endpoint actually accepts — `Authorization`, `anthropic-beta`,
   a Claude Code `User-Agent` (without which the endpoint hard-rate-limits to
   `429`), and `Content-Type`.
