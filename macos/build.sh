@@ -10,7 +10,8 @@ command -v swiftc >/dev/null || {
 }
 
 echo "› Building (swiftc -O)…"
-swiftc -O "$DIR/ai-usagebar-menubar.swift" -o "$DIR/ai-usagebar-menubar"
+# -parse-as-library: single-file SwiftUI @main app (no top-level script code).
+swiftc -O -parse-as-library "$DIR/AIUsageBar.swift" -o "$DIR/ai-usagebar-menubar"
 echo "✓ Built: $DIR/ai-usagebar-menubar"
 echo
 echo "Rodar agora:        $DIR/ai-usagebar-menubar &"

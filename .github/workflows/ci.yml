@@ -1,8 +1,7 @@
 name: CI
 
-# Native Windows test signal for PRs. The Waybar widget is Wayland-only, so the
-# Linux gate lives in the maintainer's existing flow; this job proves the CLI +
-# TUI build and test on a real windows-latest runner (no WSL).
+# macOS-only project: build + test the Rust usage engine and compile the native
+# SwiftUI menu bar app on a real macOS runner.
 on:
   push:
     branches: [main]
@@ -14,9 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  windows:
-    name: test (windows-latest)
-    runs-on: windows-latest
+  macos:
+    name: build & test (macos-latest)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
 
@@ -24,9 +23,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # ring assembles its primitives on x86_64 and needs nasm; the runner does
-      # not ship it on PATH. No-op if a future image already provides it.
-      - uses: ilammy/setup-nasm@v1
-
-      - name: Test
+      - name: Test engine
         run: cargo test --all-targets --locked
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build menu bar app
+        run: ./macos/build.sh

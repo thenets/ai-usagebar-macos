@@ -1,0 +1,487 @@
+// AIUsageBar — native SwiftUI menu bar app for ai-usagebar.
+//
+// A macOS-native counterpart to the GNOME Shell extension and Waybar widget.
+// It shows the 5-hour (session), weekly, optional Sonnet, and optional
+// extra-usage ($) windows in the menu bar with a native dropdown built from
+// SwiftUI `Gauge`s — not Unicode text bars. Data still comes from the Rust
+// `ai-usagebar` binary (same vendor/OAuth/Keychain logic), so this file is a
+// thin, fully native UI over the proven engine.
+//
+// Build:  swiftc -O -parse-as-library AIUsageBar.swift -o ai-usagebar-menubar
+//         (needs the Xcode command-line tools: `xcode-select --install`)
+// Run:    ./ai-usagebar-menubar &      (or ./install-agent.sh for login start)
+// macOS:  13+ (Ventura) — MenuBarExtra + Gauge are 13.0 APIs.
+//
+// First, on the Mac: run `claude` once so the OAuth creds land in the login
+// Keychain — ai-usagebar reads them there (src/anthropic/keychain.rs).
+
+import SwiftUI
+import AppKit
+import ServiceManagement
+
+// ─── Settings (persisted in UserDefaults; edit in Preferences) ───────────
+let DEF = UserDefaults.standard
+
+let SETTINGS_DEFAULTS: [String: Any] = [
+    "vendor": "anthropic",
+    "interval": 30.0,
+    "showSession": true,
+    "showWeekly": true,
+    "showSonnet": true,
+    "showExtra": false,
+    "colorLow": "#98c379",
+    "colorMid": "#e5c07b",
+    "colorHigh": "#d19a66",
+    "colorCritical": "#e06c75",
+    "binaryPath": "",
+]
+
+var VENDOR: String { DEF.string(forKey: "vendor") ?? "anthropic" }
+var INTERVAL: Double { let v = DEF.double(forKey: "interval"); return v > 0 ? v : 30 }
+
+let FORMAT = "{plan};;{session_pct};;{session_reset};;{weekly_pct};;{weekly_reset};;" +
+             "{sonnet_pct};;{sonnet_reset};;{extra_pct};;{extra_spent};;{extra_limit}"
+
+// ─── Color helpers ───────────────────────────────────────────────────────
+func nsHexColor(_ hex: String) -> NSColor {
+    var s = hex
+    if s.hasPrefix("#") { s.removeFirst() }
+    guard s.count == 6, let v = UInt32(s, radix: 16) else { return .labelColor }
+    return NSColor(srgbRed: CGFloat((v >> 16) & 0xff) / 255.0,
+                   green: CGFloat((v >> 8) & 0xff) / 255.0,
+                   blue: CGFloat(v & 0xff) / 255.0,
+                   alpha: 1.0)
+}
+
+// Severity → Color, mirroring the GNOME extension thresholds
+// (≥90 critical, ≥75 high, ≥50 mid, else low).
+func severityColor(_ pct: Int, low: String, mid: String, high: String, critical: String) -> Color {
+    let hex: String
+    if pct >= 90 { hex = critical }
+    else if pct >= 75 { hex = high }
+    else if pct >= 50 { hex = mid }
+    else { hex = low }
+    return Color(nsColor: nsHexColor(hex))
+}
+
+// ─── Data model ──────────────────────────────────────────────────────────
+struct Window: Equatable { let pct: Int; let reset: String }
+struct Snapshot: Equatable {
+    let plan: String
+    let session: Window
+    let weekly: Window
+    let sonnet: Window?
+    let extra: Extra?
+    struct Extra: Equatable { let pct: Int; let spent: String; let limit: String }
+}
+
+func stripMarkup(_ s: String) -> String {
+    s.replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
+}
+
+func parse(_ text: String) -> Snapshot? {
+    let f = stripMarkup(text).components(separatedBy: ";;")
+    guard f.count >= 10 else { return nil }
+    func unknownPlaceholder(_ s: String) -> Bool { s.hasPrefix("{") && s.hasSuffix("}") }
+    func t(_ i: Int) -> String {
+        let v = f[i].trimmingCharacters(in: .whitespaces)
+        return unknownPlaceholder(v) ? "" : v
+    }
+    func n(_ i: Int) -> Int? { Int(t(i)) }
+    let sonnetReset = t(6)
+    let sonnet = sonnetReset.isEmpty || sonnetReset == "—"
+        ? nil : n(5).map { Window(pct: $0, reset: sonnetReset) }
+    let spent = t(8), limit = t(9)
+    let extra: Snapshot.Extra? = (spent.isEmpty || limit.isEmpty)
+        ? nil : n(7).map { Snapshot.Extra(pct: $0, spent: spent, limit: limit) }
+    return Snapshot(plan: t(0),
+                    session: Window(pct: n(1) ?? 0, reset: t(2)),
+                    weekly: Window(pct: n(3) ?? 0, reset: t(4)),
+                    sonnet: sonnet,
+                    extra: extra)
+}
+
+// ─── Binary / subprocess helpers ─────────────────────────────────────────
+func resolveBinary(_ name: String) -> String? {
+    let fm = FileManager.default
+    if name == "ai-usagebar" {
+        let configured = DEF.string(forKey: "binaryPath") ?? ""
+        if !configured.isEmpty, fm.isExecutableFile(atPath: configured) { return configured }
+    }
+    let home = NSHomeDirectory()
+    for c in ["\(home)/.cargo/bin/\(name)", "/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)"]
+    where fm.isExecutableFile(atPath: c) {
+        return c
+    }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+    p.arguments = [name]
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = FileHandle.nullDevice
+    do {
+        try p.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let path = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !path.isEmpty && fm.isExecutableFile(atPath: path) { return path }
+    } catch {}
+    return nil
+}
+
+// Run a command in Terminal.app (used for the TUI).
+func openTuiInTerminal() {
+    let tui = resolveBinary("ai-usagebar-tui") ?? "ai-usagebar-tui"
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    p.arguments = ["-e", "tell application \"Terminal\" to do script \"\(tui)\"",
+                   "-e", "tell application \"Terminal\" to activate"]
+    try? p.run()
+}
+
+// Native "Open at Login" via ServiceManagement (macOS 13+). Only works when
+// running as a bundled `.app` (see bundle.sh); as a bare binary the register
+// call throws, which we surface as a soft failure.
+enum LoginItem {
+    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+
+    @discardableResult
+    static func toggle() -> Bool {
+        do {
+            if isEnabled { try SMAppService.mainApp.unregister() }
+            else { try SMAppService.mainApp.register() }
+        } catch {
+            NSSound.beep()   // e.g. running the un-bundled binary
+        }
+        return isEnabled
+    }
+}
+
+// Open the native Settings scene from the menu-bar popover. The selector name
+// changed across macOS versions; try the modern one, fall back to the legacy.
+func openSettingsWindow() {
+    NSApp.activate(ignoringOtherApps: true)
+    if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
+        NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+    }
+}
+
+// ─── Observable usage model ──────────────────────────────────────────────
+@MainActor
+final class UsageModel: ObservableObject {
+    static let shared = UsageModel()
+
+    @Published var snapshot: Snapshot?
+    @Published var errorText: String?
+    @Published var loading = false
+
+    private var timer: Timer?
+    private var started = false
+
+    func start() {
+        guard !started else { return }
+        started = true
+        refresh()
+        restartTimer()
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            // Vendor / interval / binary may have changed — re-arm and re-fetch.
+            Task { @MainActor in
+                self?.restartTimer()
+                self?.refresh()
+            }
+        }
+    }
+
+    func restartTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: INTERVAL, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    func refresh() {
+        guard let bin = resolveBinary("ai-usagebar") else {
+            setError("ai-usagebar not found (PATH / ~/.cargo/bin / Homebrew)")
+            return
+        }
+        loading = snapshot == nil
+        let vendor = VENDOR
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: bin)
+            p.arguments = ["--vendor", vendor, "--format", FORMAT]
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = FileHandle.nullDevice
+            var out = ""
+            do {
+                try p.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()  // read before wait
+                p.waitUntilExit()
+                out = String(data: data, encoding: .utf8) ?? ""
+            } catch {
+                Task { @MainActor in self?.setError("failed to run ai-usagebar") }
+                return
+            }
+            Task { @MainActor in self?.consume(out) }
+        }
+    }
+
+    private func consume(_ output: String) {
+        loading = false
+        guard let data = output.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = obj["text"] as? String else {
+            setError("invalid output from ai-usagebar")
+            return
+        }
+        guard let snap = parse(text) else {
+            // Transient state (Loading… / ⚠) — surface the raw text, no bars.
+            snapshot = nil
+            errorText = stripMarkup(text)
+            return
+        }
+        snapshot = snap
+        errorText = nil
+    }
+
+    private func setError(_ msg: String) {
+        loading = false
+        snapshot = nil
+        errorText = msg
+    }
+}
+
+// ─── Menu-bar label (compact, native) ────────────────────────────────────
+struct MenuBarLabel: View {
+    @ObservedObject var model: UsageModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "gauge.with.dots.needle.50percent")
+            Text(text)
+        }
+    }
+
+    private var text: String {
+        guard let s = model.snapshot else { return model.errorText != nil ? "⚠" : "…" }
+        // 5h percent + time left until the 5-hour window resets.
+        var seg = "\(s.session.pct)%"
+        if !s.session.reset.isEmpty { seg += " · \(s.session.reset)" }
+        return seg
+    }
+}
+
+// ─── Native gauge row ────────────────────────────────────────────────────
+struct WindowRow: View {
+    let name: String
+    let pct: Int
+    let value: String
+    let reset: String?
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(name).font(.system(size: 12, weight: .medium))
+                Spacer()
+                Text(value).font(.system(size: 12).monospacedDigit()).foregroundStyle(tint)
+            }
+            Gauge(value: Double(min(100, max(0, pct))) / 100.0) { EmptyView() }
+                .gaugeStyle(.accessoryLinearCapacity)
+                .tint(tint)
+            if let r = reset, !r.isEmpty {
+                Text("resets in \(r)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+// ─── Popover (dropdown) content ──────────────────────────────────────────
+struct UsagePopover: View {
+    @ObservedObject var model: UsageModel
+    @AppStorage("showSession") private var showSession = true
+    @AppStorage("showWeekly") private var showWeekly = true
+    @AppStorage("showSonnet") private var showSonnet = true
+    @AppStorage("showExtra") private var showExtra = false
+    @AppStorage("colorLow") private var colorLow = "#98c379"
+    @AppStorage("colorMid") private var colorMid = "#e5c07b"
+    @AppStorage("colorHigh") private var colorHigh = "#d19a66"
+    @AppStorage("colorCritical") private var colorCritical = "#e06c75"
+
+    @State private var loginEnabled = false
+
+    private func tint(_ pct: Int) -> Color {
+        severityColor(pct, low: colorLow, mid: colorMid, high: colorHigh, critical: colorCritical)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            content
+            Divider()
+            actions
+        }
+        .padding(14)
+        .frame(width: 300)
+        .onAppear { loginEnabled = LoginItem.isEnabled }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let s = model.snapshot {
+            Text(s.plan.isEmpty ? "AI Usage" : s.plan)
+                .font(.headline)
+            if showSession {
+                WindowRow(name: "Session (5h)", pct: s.session.pct,
+                          value: "\(s.session.pct)%", reset: s.session.reset, tint: tint(s.session.pct))
+            }
+            if showWeekly {
+                WindowRow(name: "Weekly (7d)", pct: s.weekly.pct,
+                          value: "\(s.weekly.pct)%", reset: s.weekly.reset, tint: tint(s.weekly.pct))
+            }
+            if showSonnet, let sn = s.sonnet {
+                WindowRow(name: "Sonnet (7d)", pct: sn.pct,
+                          value: "\(sn.pct)%", reset: sn.reset, tint: tint(sn.pct))
+            }
+            if showExtra, let e = s.extra {
+                WindowRow(name: "Extra usage", pct: e.pct,
+                          value: "\(e.spent) / \(e.limit)", reset: nil, tint: tint(e.pct))
+            }
+        } else if let e = model.errorText {
+            Label(e, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .font(.system(size: 12))
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Loading…").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        MenuButton(title: "Refresh now", systemImage: "arrow.clockwise") { model.refresh() }
+        MenuButton(title: "Open TUI", systemImage: "terminal") { openTuiInTerminal() }
+        MenuButton(title: "Open at Login",
+                   systemImage: loginEnabled ? "checkmark.circle.fill" : "circle") {
+            loginEnabled = LoginItem.toggle()
+        }
+        Divider()
+        MenuButton(title: "Quit", systemImage: "power") { NSApp.terminate(nil) }
+    }
+}
+
+// A borderless, full-width menu-style button row.
+struct MenuButton: View {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// ─── Preferences (native SwiftUI Settings scene) ─────────────────────────
+extension Color {
+    init(hexString: String) { self.init(nsColor: nsHexColor(hexString)) }
+    var hexString: String {
+        let ns = NSColor(self).usingColorSpace(.sRGB) ?? .black
+        return String(format: "#%02x%02x%02x",
+                      Int((ns.redComponent * 255).rounded()),
+                      Int((ns.greenComponent * 255).rounded()),
+                      Int((ns.blueComponent * 255).rounded()))
+    }
+}
+
+struct HexColorPicker: View {
+    let title: String
+    @Binding var hex: String
+    var body: some View {
+        ColorPicker(title, selection: Binding(
+            get: { Color(hexString: hex) },
+            set: { hex = $0.hexString }
+        ), supportsOpacity: false)
+    }
+}
+
+struct SettingsView: View {
+    @AppStorage("vendor") private var vendor = "anthropic"
+    @AppStorage("interval") private var interval = 30.0
+    @AppStorage("showSession") private var showSession = true
+    @AppStorage("showWeekly") private var showWeekly = true
+    @AppStorage("showSonnet") private var showSonnet = true
+    @AppStorage("showExtra") private var showExtra = false
+    @AppStorage("colorLow") private var colorLow = "#98c379"
+    @AppStorage("colorMid") private var colorMid = "#e5c07b"
+    @AppStorage("colorHigh") private var colorHigh = "#d19a66"
+    @AppStorage("colorCritical") private var colorCritical = "#e06c75"
+    @AppStorage("binaryPath") private var binaryPath = ""
+
+    private let vendors = ["anthropic", "openai", "zai", "openrouter", "deepseek"]
+
+    var body: some View {
+        Form {
+            Section("Display") {
+                Toggle("Show session (5h)", isOn: $showSession)
+                Toggle("Show weekly (7d)", isOn: $showWeekly)
+                Toggle("Show Sonnet (7d)", isOn: $showSonnet)
+                Toggle("Show extra usage ($)", isOn: $showExtra)
+            }
+            Section("Severity colors") {
+                HexColorPicker(title: "Low (<50%)", hex: $colorLow)
+                HexColorPicker(title: "Mid (50–74%)", hex: $colorMid)
+                HexColorPicker(title: "High (75–89%)", hex: $colorHigh)
+                HexColorPicker(title: "Critical (≥90%)", hex: $colorCritical)
+            }
+            Section("Data") {
+                Picker("Vendor", selection: $vendor) {
+                    ForEach(vendors, id: \.self) { Text($0) }
+                }
+                Stepper("Refresh interval: \(Int(interval))s", value: $interval, in: 5...3600, step: 5)
+                TextField("Binary path (empty = auto)", text: $binaryPath)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 420, height: 460)
+    }
+}
+
+// ─── App entry point ─────────────────────────────────────────────────────
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)   // menu-bar agent, no Dock icon
+        UsageModel.shared.start()               // fetch immediately, not on first click
+    }
+}
+
+@main
+struct AIUsageBarApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var model = UsageModel.shared
+
+    init() { DEF.register(defaults: SETTINGS_DEFAULTS) }
+
+    var body: some Scene {
+        MenuBarExtra {
+            UsagePopover(model: model)
+        } label: {
+            MenuBarLabel(model: model)
+        }
+        .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+        }
+    }
+}

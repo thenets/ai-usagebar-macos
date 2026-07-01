@@ -3,7 +3,7 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$DIR/ai-usagebar-menubar"
-LABEL="com.akitaonrails.ai-usagebar-menubar"
+LABEL="org.thenets.ai-usagebar-macos"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 [ -x "$BIN" ] || { echo "Compile primeiro: $DIR/build.sh" >&2; exit 1; }

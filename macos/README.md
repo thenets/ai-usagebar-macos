@@ -1,66 +1,84 @@
 # AI Usage Bar — macOS menu bar app
 
-A native macOS menu bar app for [`ai-usagebar`](../README.md). It shows the
-**5-hour (session)** and **weekly** usage bars — plus an optional
-**extra-usage (cost)** bar — in the menu bar next to the clock, with a native
-dropdown. It's the macOS counterpart to the [GNOME Shell
-extension](https://github.com/akitaonrails/ai-usagebar/tree/main/gnome-extension): same binary, same One Dark colors and
-severity thresholds.
+The native macOS menu bar app of
+[`ai-usagebar-macos`](../README.md). It shows your **Claude Code** 5-hour usage
+next to the clock — the percentage and time-to-reset — with a native SwiftUI
+dropdown of per-window gauges.
 
-A single Swift file (`NSStatusItem` + `NSAttributedString`); no Xcode project.
+Built with **native macOS UI components**: SwiftUI
+[`MenuBarExtra`](https://developer.apple.com/documentation/swiftui/menubarextra)
+with a `.window` popover, and per-window
+[`Gauge`](https://developer.apple.com/documentation/swiftui/gauge)s in the
+`.accessoryLinearCapacity` style — real system controls, not text bars. A single
+Swift file (`AIUsageBar.swift`); no Xcode project.
 
 > **Installing?** Follow the step-by-step in **[INSTALL.md](INSTALL.md)**.
 
 ## Requirements
 
-- macOS with the **Command Line Tools** (`xcode-select --install`) for `swiftc`.
-- The `ai-usagebar` binary on the Mac. Install it with `cargo install ai-usagebar`
-  (lands in `~/.cargo/bin`) — see the [main README](../README.md).
-- Run `claude` once on the Mac so its OAuth creds are in the login **Keychain**;
-  ai-usagebar reads them there automatically (no env vars).
+- **macOS 13+ (Ventura)** — `MenuBarExtra` and `Gauge` are macOS 13.0 APIs.
+- **Command Line Tools** (`xcode-select --install`) for `swiftc`.
+- The `ai-usagebar` engine binary on the Mac. Build it from this repo:
+  `cargo install --path ..` (lands in `~/.cargo/bin`) — see the
+  [main README](../README.md).
+- Run `claude` once so its OAuth creds are in the login **Keychain**; the engine
+  reads them there automatically (no env vars).
 
 ## Build & run
 
 ```bash
 cd macos
-./build.sh                 # swiftc -O → ./ai-usagebar-menubar
+./build.sh                 # swiftc -O -parse-as-library AIUsageBar.swift → ./ai-usagebar-menubar
 ./ai-usagebar-menubar &    # appears in the menu bar (no Dock icon)
 ```
 
-Start at login:
+### As a proper `.app` bundle
+
+```bash
+./bundle.sh                # → "AI Usage Bar.app" (generated icon + Info.plist, ad-hoc signed)
+open "AI Usage Bar.app"
+cp -R "AI Usage Bar.app" /Applications/    # optional — then toggle "Open at Login"
+```
+
+Start at login: use the **Open at Login** item in the dropdown (native
+`SMAppService` Login Item — works from the `.app` bundle), or the LaunchAgent:
 
 ```bash
 ./install-agent.sh         # installs a LaunchAgent (RunAtLoad)
 ```
 
-> Not code-signed. It's a local binary you built yourself, so Gatekeeper
-> doesn't block it when launched from the terminal / LaunchAgent. If macOS ever
-> complains, right-click the binary in Finder → **Open** once.
+> Not code-signed with a Developer ID. It's a local binary you built yourself,
+> so Gatekeeper doesn't block it when launched from the terminal / LaunchAgent.
+> If macOS ever complains, right-click the app in Finder → **Open** once.
 
 ## Configuration
 
-Open **Preferences** from the dropdown (or press **⌘,**) — a native window
-with toggles, color pickers, vendor, interval, bar width, and binary path.
-Settings persist in `UserDefaults` and apply **live, no rebuild**.
+Settings persist in `UserDefaults` under `org.thenets.ai-usagebar-macos` and
+apply **live** — gauges re-tint and windows show/hide the moment you change a
+setting:
 
-| Setting | Default | Notes |
+```bash
+defaults write org.thenets.ai-usagebar-macos showExtra -bool true
+defaults write org.thenets.ai-usagebar-macos interval  -int  60
+```
+
+| Key | Default | Notes |
 |---|---|---|
-| Show 5h / weekly / extra | on / on / off | which bars appear |
-| Show percentage/value | on | numeric value next to each bar |
-| Show bars | on | off = numbers only |
-| Bar width | 8 | cells per menu-bar bar (4–20) |
-| Colors (low/mid/high/critical/empty) | One Dark | bar color per severity (≥90 / ≥75 / ≥50 / else) |
-| Refresh interval | 30 s | 5–3600 |
-| Vendor | anthropic | only Anthropic has the 5h + weekly windows |
-| Binary path | auto | empty = `~/.cargo/bin`, Homebrew, then `PATH` |
+| `showSession` / `showWeekly` / `showSonnet` / `showExtra` | on / on / on / off | which windows appear as gauges |
+| `colorLow` / `colorMid` / `colorHigh` / `colorCritical` | One Dark | gauge tint per severity (≥90 / ≥75 / ≥50 / else) |
+| `interval` | 30 | refresh seconds (5–3600) |
+| `vendor` | anthropic | only Anthropic has the 5h + weekly windows |
+| `binaryPath` | auto | empty = `~/.cargo/bin`, Homebrew, then `PATH` |
 
-The Preferences window needs **macOS 12+** (the menu bar itself works on
-10.15+). Tags/labels use the system label colors, so they adapt to a light or
-dark menu bar; only the bar fill/empty colors are configurable.
+The menu-bar label is a system SF Symbol + text, so it adapts to a light or dark
+menu bar automatically; the configurable colors tint the gauge fills in the
+dropdown.
 
 ## How it works
 
 Runs `ai-usagebar --vendor <v> --format '{plan};;{session_pct};;…'`, parses the
-Waybar JSON (`{text, …}`), and draws the bars as colored `NSAttributedString`s
-in the status item and the dropdown. The subprocess runs **off the main thread**
-(`DispatchQueue.global` → back to `.main` for UI), so the UI never blocks.
+JSON (`{text, …}`), and renders each usage window as a native SwiftUI `Gauge`
+(`.accessoryLinearCapacity`) tinted by severity. The subprocess runs **off the
+main thread** (`DispatchQueue.global` → back to `@MainActor` for UI), so the UI
+never blocks. The app is a `MenuBarExtra` scene with
+`.setActivationPolicy(.accessory)` — a menu-bar agent with no Dock icon.
