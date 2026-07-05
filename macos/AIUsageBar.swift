@@ -37,7 +37,6 @@ let SETTINGS_DEFAULTS: [String: Any] = [
     "binaryPath": "",
 ]
 
-var VENDOR: String { DEF.string(forKey: "vendor") ?? "anthropic" }
 var INTERVAL: Double { let v = DEF.double(forKey: "interval"); return v > 0 ? v : 30 }
 
 // ─── Color helpers ───────────────────────────────────────────────────────
@@ -65,6 +64,7 @@ func severityColor(_ pct: Int, low: String, mid: String, high: String, critical:
 // ─── Data model ──────────────────────────────────────────────────────────
 struct Window: Equatable { let pct: Int; let reset: String }
 struct Snapshot: Equatable {
+    let vendor: String
     let plan: String
     let session: Window
     let weekly: Window
@@ -72,6 +72,8 @@ struct Snapshot: Equatable {
     let fable: Window?
     let modelQuotas: [ModelQuota]
     let extra: Extra?
+    let codeReview: Window?
+    let creditBalance: String?
     struct ModelQuota: Equatable, Identifiable {
         var id: String { name }
         let name: String
@@ -80,35 +82,19 @@ struct Snapshot: Equatable {
     struct Extra: Equatable { let pct: Int; let spent: String; let limit: String }
 }
 
-func stripMarkup(_ s: String) -> String {
-    s.replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
+func vendorDisplayName(_ vendor: String) -> String {
+    switch vendor {
+    case "anthropic": return "Claude"
+    case "openai": return "Codex"
+    case "zai": return "Z.AI"
+    case "openrouter": return "OpenRouter"
+    case "deepseek": return "DeepSeek"
+    default: return vendor
+    }
 }
 
-func parse(_ text: String) -> Snapshot? {
-    let f = stripMarkup(text).components(separatedBy: ";;")
-    guard f.count >= 12 else { return nil }
-    func unknownPlaceholder(_ s: String) -> Bool { s.hasPrefix("{") && s.hasSuffix("}") }
-    func t(_ i: Int) -> String {
-        let v = f[i].trimmingCharacters(in: .whitespaces)
-        return unknownPlaceholder(v) ? "" : v
-    }
-    func n(_ i: Int) -> Int? { Int(t(i)) }
-    let sonnetReset = t(6)
-    let sonnet = sonnetReset.isEmpty || sonnetReset == "—"
-        ? nil : n(5).map { Window(pct: $0, reset: sonnetReset) }
-    let fableReset = t(8)
-    let fable = fableReset.isEmpty || fableReset == "—"
-        ? nil : n(7).map { Window(pct: $0, reset: fableReset) }
-    let spent = t(10), limit = t(11)
-    let extra: Snapshot.Extra? = (spent.isEmpty || limit.isEmpty)
-        ? nil : n(9).map { Snapshot.Extra(pct: $0, spent: spent, limit: limit) }
-    return Snapshot(plan: t(0),
-                    session: Window(pct: n(1) ?? 0, reset: t(2)),
-                    weekly: Window(pct: n(3) ?? 0, reset: t(4)),
-                    sonnet: sonnet,
-                    fable: fable,
-                    modelQuotas: fable.map { [Snapshot.ModelQuota(name: "Fable", window: $0)] } ?? [],
-                    extra: extra)
+func stripMarkup(_ s: String) -> String {
+    s.replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
 }
 
 func countdown(_ iso: String?) -> String {
@@ -130,6 +116,8 @@ func parseJSON(_ text: String) -> Snapshot? {
     guard let data = text.data(using: .utf8),
           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let snap = obj["snapshot"] as? [String: Any] else { return nil }
+
+    let vendor = obj["vendor"] as? String ?? "unknown"
 
     func int(_ value: Any?) -> Int? {
         if let i = value as? Int { return i }
@@ -161,13 +149,20 @@ func parseJSON(_ text: String) -> Snapshot? {
                               limit: e["limit"] as? String ?? "")
     }
 
-    return Snapshot(plan: snap["plan"] as? String ?? "",
+    let creditsDict = snap["credits"] as? [String: Any]
+    let creditBalance = creditsDict?["balance"] as? String
+    let creditBalanceCleaned = creditBalance?.isEmpty == true ? nil : creditBalance
+
+    return Snapshot(vendor: vendor,
+                    plan: snap["plan"] as? String ?? "",
                     session: session,
                     weekly: weekly,
                     sonnet: window(snap["sonnet"] as? [String: Any]),
                     fable: window(snap["fable"] as? [String: Any]),
                     modelQuotas: modelQuotas,
-                    extra: extra)
+                    extra: extra,
+                    codeReview: window(snap["code_review"] as? [String: Any]),
+                    creditBalance: creditBalanceCleaned)
 }
 
 // ─── Binary / subprocess helpers ─────────────────────────────────────────
@@ -241,12 +236,13 @@ func openSettingsWindow() {
 final class UsageModel: ObservableObject {
     static let shared = UsageModel()
 
-    @Published var snapshot: Snapshot?
+    @Published var snapshots: [String: Snapshot] = [:]
     @Published var errorText: String?
     @Published var loading = false
 
     private var timer: Timer?
     private var started = false
+    private let vendors = ["anthropic", "openai"]
 
     func start() {
         guard !started else { return }
@@ -256,7 +252,6 @@ final class UsageModel: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            // Vendor / interval / binary may have changed — re-arm and re-fetch.
             Task { @MainActor in
                 self?.restartTimer()
                 self?.refresh()
@@ -276,44 +271,54 @@ final class UsageModel: ObservableObject {
             setError("ai-usagebar not found (PATH / ~/.cargo/bin / Homebrew)")
             return
         }
-        loading = snapshot == nil
-        let vendor = VENDOR
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: bin)
-            p.arguments = ["--vendor", vendor, "--json"]
-            let pipe = Pipe()
-            p.standardOutput = pipe
-            p.standardError = FileHandle.nullDevice
-            var out = ""
-            do {
-                try p.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()  // read before wait
-                p.waitUntilExit()
-                out = String(data: data, encoding: .utf8) ?? ""
-            } catch {
-                Task { @MainActor in self?.setError("failed to run ai-usagebar") }
-                return
-            }
-            Task { @MainActor in self?.consume(out) }
-        }
-    }
+        loading = snapshots.isEmpty
 
-    private func consume(_ output: String) {
-        loading = false
-        guard let snap = parseJSON(output) else {
-            // Transient state (Loading… / ⚠) — surface the raw text, no bars.
-            snapshot = nil
-            errorText = stripMarkup(output)
-            return
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var results: [String: Snapshot] = [:]
+            var lastError: String?
+
+            for vendor in self?.vendors ?? [] {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: bin)
+                p.arguments = ["--vendor", vendor, "--json"]
+                let pipe = Pipe()
+                p.standardOutput = pipe
+                p.standardError = FileHandle.nullDevice
+                var out = ""
+                do {
+                    try p.run()
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    p.waitUntilExit()
+                    out = String(data: data, encoding: .utf8) ?? ""
+                } catch {
+                    lastError = "failed to run ai-usagebar for \(vendor)"
+                    continue
+                }
+                if let snap = parseJSON(out) {
+                    results[vendor] = snap
+                } else {
+                    let text = stripMarkup(out)
+                    if !text.isEmpty { lastError = text }
+                }
+            }
+
+            Task { @MainActor in
+                guard let self else { return }
+                self.loading = false
+                if !results.isEmpty {
+                    self.snapshots = results
+                    self.errorText = nil
+                } else {
+                    self.snapshots = [:]
+                    self.errorText = lastError ?? "no data available"
+                }
+            }
         }
-        snapshot = snap
-        errorText = nil
     }
 
     private func setError(_ msg: String) {
         loading = false
-        snapshot = nil
+        snapshots = [:]
         errorText = msg
     }
 }
@@ -330,11 +335,15 @@ struct MenuBarLabel: View {
     }
 
     private var text: String {
-        guard let s = model.snapshot else { return model.errorText != nil ? "⚠" : "…" }
-        // 5h percent + time left until the 5-hour window resets.
-        var seg = "\(s.session.pct)%"
-        if !s.session.reset.isEmpty { seg += " · \(s.session.reset)" }
-        return seg
+        if model.snapshots.isEmpty {
+            return model.errorText != nil ? "⚠" : "…"
+        }
+        let entries = model.snapshots.keys.sorted().compactMap { vendor -> String? in
+            guard let s = model.snapshots[vendor], s.session.pct > 0 else { return nil }
+            return "\(vendorDisplayName(vendor)):\(s.session.pct)%"
+        }
+        if entries.isEmpty { return "Idle" }
+        return entries.joined(separator: " · ")
     }
 }
 
@@ -396,32 +405,20 @@ struct UsagePopover: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let s = model.snapshot {
-            Text(s.plan.isEmpty ? "AI Usage" : s.plan)
-                .font(.headline)
-            if showSession {
-                WindowRow(name: "Session (5h)", pct: s.session.pct,
-                          value: "\(s.session.pct)%", reset: s.session.reset, tint: tint(s.session.pct))
-            }
-            if showWeekly {
-                WindowRow(name: "Weekly (7d)", pct: s.weekly.pct,
-                          value: "\(s.weekly.pct)%", reset: s.weekly.reset, tint: tint(s.weekly.pct))
-            }
-            if showSonnet, let sn = s.sonnet {
-                WindowRow(name: "Sonnet (7d)", pct: sn.pct,
-                          value: "\(sn.pct)%", reset: sn.reset, tint: tint(sn.pct))
-            }
-            if showModelQuotas {
-                ForEach(s.modelQuotas) { quota in
-                    WindowRow(name: "\(quota.name) (7d)", pct: quota.window.pct,
-                              value: "\(quota.window.pct)%", reset: quota.window.reset,
-                              tint: tint(quota.window.pct))
+        let activeVendors = model.snapshots.keys.sorted().filter { vendor in
+            model.snapshots[vendor].map { $0.session.pct > 0 } ?? false
+        }
+        if !activeVendors.isEmpty {
+            ForEach(activeVendors, id: \.self) { key in
+                if let s = model.snapshots[key] {
+                    vendorSection(s)
+                        .padding(.bottom, activeVendors.last == key ? 0 : 4)
                 }
             }
-            if showExtra, let e = s.extra {
-                WindowRow(name: "Extra usage", pct: e.pct,
-                          value: "\(e.spent) / \(e.limit)", reset: nil, tint: tint(e.pct))
-            }
+        } else if !model.snapshots.isEmpty {
+            Text("Idle")
+                .font(.headline)
+                .foregroundStyle(.secondary)
         } else if let e = model.errorText {
             Label(e, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
@@ -431,6 +428,45 @@ struct UsagePopover: View {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text("Loading…").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private func vendorSection(_ s: Snapshot) -> some View {
+        Text(vendorDisplayName(s.vendor))
+            .font(.headline)
+        if showSession {
+            WindowRow(name: "Session (5h)", pct: s.session.pct,
+                      value: "\(s.session.pct)%", reset: s.session.reset, tint: tint(s.session.pct))
+        }
+        if showWeekly {
+            WindowRow(name: "Weekly (7d)", pct: s.weekly.pct,
+                      value: "\(s.weekly.pct)%", reset: s.weekly.reset, tint: tint(s.weekly.pct))
+        }
+        if showSonnet, let sn = s.sonnet {
+            WindowRow(name: "Sonnet (7d)", pct: sn.pct,
+                      value: "\(sn.pct)%", reset: sn.reset, tint: tint(sn.pct))
+        }
+        if showModelQuotas {
+            ForEach(s.modelQuotas) { quota in
+                WindowRow(name: "\(quota.name) (7d)", pct: quota.window.pct,
+                          value: "\(quota.window.pct)%", reset: quota.window.reset,
+                          tint: tint(quota.window.pct))
+            }
+        }
+        if showExtra, let e = s.extra {
+            WindowRow(name: "Extra usage", pct: e.pct,
+                      value: "\(e.spent) / \(e.limit)", reset: nil, tint: tint(e.pct))
+        }
+        if let cr = s.codeReview {
+            WindowRow(name: "Code Review (7d)", pct: cr.pct,
+                      value: "\(cr.pct)%", reset: cr.reset, tint: tint(cr.pct))
+        }
+        if let bal = s.creditBalance {
+            HStack {
+                Text("Credits").font(.system(size: 12, weight: .medium))
+                Spacer()
+                Text(bal).font(.system(size: 12).monospacedDigit())
             }
         }
     }
@@ -487,7 +523,6 @@ struct HexColorPicker: View {
 }
 
 struct SettingsView: View {
-    @AppStorage("vendor") private var vendor = "anthropic"
     @AppStorage("interval") private var interval = 30.0
     @AppStorage("showSession") private var showSession = true
     @AppStorage("showWeekly") private var showWeekly = true
@@ -499,8 +534,6 @@ struct SettingsView: View {
     @AppStorage("colorHigh") private var colorHigh = "#d19a66"
     @AppStorage("colorCritical") private var colorCritical = "#e06c75"
     @AppStorage("binaryPath") private var binaryPath = ""
-
-    private let vendors = ["anthropic", "openai", "zai", "openrouter", "deepseek"]
 
     var body: some View {
         Form {
@@ -518,9 +551,9 @@ struct SettingsView: View {
                 HexColorPicker(title: "Critical (≥90%)", hex: $colorCritical)
             }
             Section("Data") {
-                Picker("Vendor", selection: $vendor) {
-                    ForEach(vendors, id: \.self) { Text($0) }
-                }
+                Text("Fetching Claude + Codex usage")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Stepper("Refresh interval: \(Int(interval))s", value: $interval, in: 5...3600, step: 5)
                 TextField("Binary path (empty = auto)", text: $binaryPath)
             }

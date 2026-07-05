@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Notes for Claude Code (and humans) working in **ai-usagebar-macos**. Keep tight:
 these are invariants and layout, not a project tour.
@@ -7,6 +7,28 @@ This is a **macOS-only, self-contained** project: a native SwiftUI menu bar app
 (`macos/`) over an in-repo cross-platform Rust **usage engine** (`src/`). The
 engine is adapted from [`ai-usagebar`](https://github.com/akitaonrails/ai-usagebar)
 by Fabio Akita — keep that attribution intact (README Acknowledgements, LICENSE).
+
+## Full install (build + deploy + restart)
+
+```bash
+cd macos && ./install.sh
+```
+
+Runs `cargo install`, bundles the `.app`, copies to `/Applications`,
+kills any running instance, and launches the fresh app.
+
+## Restart only
+
+```bash
+pkill -f "ai-usagebar-menubar" && sleep 1 && open "/Applications/AI Usage Bar.app"
+```
+
+## Individual steps
+
+- Install Rust engine: `cargo install --path .`
+- Build + bundle .app: `cd macos && ./bundle.sh`
+- Deploy .app: `cp -R "macos/AI Usage Bar.app" /Applications/`
+- Install LaunchAgent: `cd macos && ./install-agent.sh`
 
 ## Build & run
 
@@ -51,8 +73,8 @@ cd macos && ./bundle.sh                # package "AI Usage Bar.app" (icon, Info.
 
 - `macos/AIUsageBar.swift` — the native SwiftUI menu bar app (MenuBarExtra +
   Gauge, Settings, SMAppService Login Item). Shells out to the engine.
-- `macos/build.sh` / `bundle.sh` / `install-agent.sh` — build the binary, the
-  `.app` bundle, and the login LaunchAgent.
+- `macos/build.sh` / `bundle.sh` / `install.sh` / `install-agent.sh` — build the
+  binary, full install, the `.app` bundle, and the login LaunchAgent.
 - `src/active.rs` — scroll-cycle active-vendor state file.
 - `src/anthropic/`, `src/openai/`, `src/openrouter/`, `src/zai/`,
   `src/deepseek/` — per-vendor types + fetch + render.
