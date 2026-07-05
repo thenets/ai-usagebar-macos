@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use reqwest::Client;
+use serde_json::{Value, json};
 
 use crate::anthropic::{self, fetch::FetchOutcome};
 use crate::cache::{Cache, DEFAULT_TTL};
@@ -16,6 +17,10 @@ use crate::error::{AppError, Result};
 use crate::openai;
 use crate::openrouter;
 use crate::theme::Theme;
+use crate::usage::{
+    AnthropicSnapshot, DeepseekSnapshot, OpenAiSnapshot, OpenAiSource, OpenRouterSnapshot,
+    UsageWindow, ZaiSnapshot,
+};
 use crate::vendor::{HTTP_CLIENT_TIMEOUT, RenderOpts, VendorOutcome};
 use crate::waybar::WaybarOutput;
 use crate::widget::cli::{Cli, Vendor};
@@ -79,6 +84,20 @@ async fn run_watch(cli: Cli, secs: u64) -> i32 {
 }
 
 async fn run_once(cli: &Cli, out: &mut impl Write) {
+    if cli.json {
+        match build_json_output(cli).await {
+            Ok(value) => {
+                let _ = writeln!(out, "{}", serde_json::to_string(&value).unwrap_or_default());
+            }
+            Err(e) => {
+                let output = fallback(&e, cli);
+                let _ = out.write_all(output.to_json_line().as_bytes());
+            }
+        }
+        let _ = out.flush();
+        return;
+    }
+
     let output = match build_output(cli).await {
         Ok(o) => o,
         Err(e) => fallback(&e, cli),
@@ -109,6 +128,138 @@ async fn build_output(cli: &Cli) -> Result<WaybarOutput> {
         Vendor::Zai => zai_output(cli, &config).await,
         Vendor::Deepseek => deepseek_output(cli, &config).await,
     }
+}
+
+async fn build_json_output(cli: &Cli) -> Result<Value> {
+    let config = Config::load().unwrap_or_default();
+    let vendor = cli.resolved_vendor(&config);
+    if !config.is_enabled(vendor.to_id()) {
+        return Err(AppError::Other(format!(
+            "vendor {:?} is disabled in {}",
+            vendor,
+            crate::config::config_path_hint()
+        )));
+    }
+    match vendor {
+        Vendor::Anthropic => anthropic_json(cli, &config).await,
+        Vendor::Openrouter => openrouter_json(cli, &config).await,
+        Vendor::Openai => openai_json(cli, &config).await,
+        Vendor::Zai => zai_json(cli, &config).await,
+        Vendor::Deepseek => deepseek_json(cli, &config).await,
+    }
+}
+
+async fn anthropic_json(cli: &Cli, config: &Config) -> Result<Value> {
+    let client = http_client()?;
+    let cache = vendor_cache(cli, "anthropic")?;
+    let creds_path = match cli.creds_path.as_deref() {
+        Some(p) => p.to_path_buf(),
+        None => match config.anthropic.credentials_path.as_deref() {
+            Some(p) => p.to_path_buf(),
+            None => anthropic::creds::default_path()?,
+        },
+    };
+    let endpoints = anthropic::fetch::Endpoints::default();
+    let outcome =
+        anthropic::fetch_snapshot(&client, &creds_path, &cache, &endpoints, DEFAULT_TTL).await?;
+
+    Ok(json_output(
+        Vendor::Anthropic,
+        outcome.stale,
+        outcome.last_error,
+        outcome.cache_age,
+        anthropic_snapshot_json(&outcome.snapshot),
+    ))
+}
+
+async fn openai_json(cli: &Cli, config: &Config) -> Result<Value> {
+    let client = http_client()?;
+    let cache = vendor_cache(cli, "openai")?;
+    let creds_path = match config.openai.codex_auth_path.as_deref() {
+        Some(p) => p.to_path_buf(),
+        None => openai::creds::default_path()?,
+    };
+    let endpoints = openai::fetch::Endpoints::default();
+    let outcome =
+        openai::fetch_snapshot(&client, &creds_path, &cache, &endpoints, DEFAULT_TTL).await?;
+
+    Ok(json_output(
+        Vendor::Openai,
+        outcome.stale,
+        outcome.last_error,
+        outcome.cache_age,
+        openai_snapshot_json(&outcome.snapshot),
+    ))
+}
+
+async fn zai_json(cli: &Cli, config: &Config) -> Result<Value> {
+    let api_key = crate::config::resolve_api_key(
+        "Zai",
+        &config.zai.api_key_env,
+        config.zai.api_key.as_deref(),
+    )?;
+    let client = http_client()?;
+    let cache = vendor_cache(cli, "zai")?;
+    let endpoints = zai::fetch::Endpoints::default();
+    let outcome = zai::fetch_snapshot(
+        &client,
+        &api_key,
+        &cache,
+        &endpoints,
+        DEFAULT_TTL,
+        config.zai.plan_tier.as_deref(),
+    )
+    .await?;
+
+    Ok(json_output(
+        Vendor::Zai,
+        outcome.stale,
+        outcome.last_error,
+        outcome.cache_age,
+        zai_snapshot_json(&outcome.snapshot),
+    ))
+}
+
+async fn openrouter_json(cli: &Cli, config: &Config) -> Result<Value> {
+    let api_key = crate::config::resolve_api_key(
+        "OpenRouter",
+        &config.openrouter.api_key_env,
+        config.openrouter.api_key.as_deref(),
+    )?;
+    let client = http_client()?;
+    let cache = vendor_cache(cli, "openrouter")?;
+    let endpoints = openrouter::fetch::Endpoints::default();
+    let outcome =
+        openrouter::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await?;
+
+    Ok(json_output(
+        Vendor::Openrouter,
+        outcome.stale,
+        outcome.last_error,
+        outcome.cache_age,
+        openrouter_snapshot_json(&outcome.snapshot),
+    ))
+}
+
+async fn deepseek_json(cli: &Cli, config: &Config) -> Result<Value> {
+    let api_key = crate::config::resolve_api_key(
+        "DeepSeek",
+        &config.deepseek.api_key_env,
+        config.deepseek.api_key.as_deref(),
+    )?;
+    let client = http_client()?;
+    let cache = vendor_cache(cli, "deepseek")?;
+    let endpoints = deepseek::fetch::Endpoints::default();
+    let outcome =
+        deepseek::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await?;
+
+    Ok(json_output(
+        Vendor::Deepseek,
+        outcome.stale,
+        outcome.last_error,
+        outcome.cache_age,
+        deepseek_snapshot_json(&outcome.snapshot),
+    ))
 }
 
 async fn openai_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
@@ -317,6 +468,120 @@ fn theme_from_cli(cli: &Cli) -> Theme {
     )
 }
 
+fn json_output(
+    vendor: Vendor,
+    stale: bool,
+    last_error: Option<(u16, String)>,
+    cache_age: Option<Duration>,
+    snapshot: Value,
+) -> Value {
+    json!({
+        "vendor": vendor.to_id().slug(),
+        "stale": stale,
+        "cache_age_seconds": cache_age.map(|age| age.as_secs()),
+        "last_error": last_error.map(|(status, body)| json!({
+            "status": status,
+            "body": body,
+        })),
+        "snapshot": snapshot,
+    })
+}
+
+fn usage_window_json(window: &UsageWindow) -> Value {
+    json!({
+        "utilization_pct": window.utilization_pct,
+        "resets_at": window.resets_at.map(|dt| dt.to_rfc3339()),
+        "window_seconds": window.window_duration.num_seconds(),
+    })
+}
+
+fn anthropic_snapshot_json(snapshot: &AnthropicSnapshot) -> Value {
+    json!({
+        "plan": snapshot.plan,
+        "session": usage_window_json(&snapshot.session),
+        "weekly": usage_window_json(&snapshot.weekly),
+        "sonnet": snapshot.sonnet.as_ref().map(usage_window_json),
+        "fable": snapshot.fable.as_ref().map(usage_window_json),
+        "model_quotas": snapshot.model_quotas.iter().map(|quota| json!({
+            "name": quota.name,
+            "window": usage_window_json(&quota.window),
+        })).collect::<Vec<_>>(),
+        "extra": snapshot.extra.map(|extra| json!({
+            "limit_cents": extra.limit.0,
+            "spent_cents": extra.spent.0,
+            "limit": extra.limit.fmt_dollars(),
+            "spent": extra.spent.fmt_dollars(),
+            "utilization_pct": extra.percent(),
+        })),
+    })
+}
+
+fn openai_snapshot_json(snapshot: &OpenAiSnapshot) -> Value {
+    json!({
+        "plan": snapshot.plan,
+        "source": openai_source_json(snapshot.source),
+        "session": usage_window_json(&snapshot.session),
+        "weekly": usage_window_json(&snapshot.weekly),
+        "code_review": snapshot.code_review.as_ref().map(usage_window_json),
+        "credits": snapshot.credits.as_ref().map(|credits| json!({
+            "balance": credits.balance,
+            "has_credits": credits.has_credits,
+            "unlimited": credits.unlimited,
+            "approx_local_messages": credits.approx_local_messages.map(|(low, high)| json!({
+                "low": low,
+                "high": high,
+            })),
+            "approx_cloud_messages": credits.approx_cloud_messages.map(|(low, high)| json!({
+                "low": low,
+                "high": high,
+            })),
+        })),
+    })
+}
+
+fn openai_source_json(source: OpenAiSource) -> &'static str {
+    match source {
+        OpenAiSource::CodexOauth => "codex_oauth",
+        OpenAiSource::AdminKeyMtd => "admin_key_mtd",
+        OpenAiSource::Unavailable => "unavailable",
+    }
+}
+
+fn zai_snapshot_json(snapshot: &ZaiSnapshot) -> Value {
+    json!({
+        "plan": snapshot.plan,
+        "session": snapshot.session.as_ref().map(usage_window_json),
+        "weekly": snapshot.weekly.as_ref().map(usage_window_json),
+        "mcp": snapshot.mcp.as_ref().map(usage_window_json),
+    })
+}
+
+fn openrouter_snapshot_json(snapshot: &OpenRouterSnapshot) -> Value {
+    json!({
+        "label": snapshot.label,
+        "total_credits": snapshot.total_credits,
+        "total_usage": snapshot.total_usage,
+        "usage_daily": snapshot.usage_daily,
+        "usage_weekly": snapshot.usage_weekly,
+        "usage_monthly": snapshot.usage_monthly,
+        "is_free_tier": snapshot.is_free_tier,
+        "limit": snapshot.limit,
+        "limit_remaining": snapshot.limit_remaining,
+        "balance": snapshot.balance(),
+        "consumed_pct": snapshot.consumed_pct(),
+    })
+}
+
+fn deepseek_snapshot_json(snapshot: &DeepseekSnapshot) -> Value {
+    json!({
+        "is_available": snapshot.is_available,
+        "balance": snapshot.balance,
+        "granted": snapshot.granted,
+        "topped_up": snapshot.topped_up,
+        "currency": snapshot.currency,
+    })
+}
+
 /// Fallback output when everything goes wrong — always renders a `⚠` widget.
 fn fallback(err: &AppError, _cli: &Cli) -> WaybarOutput {
     let tooltip = match err {
@@ -360,6 +625,8 @@ mod tests {
                     window_duration: chrono::Duration::days(7),
                 },
                 sonnet: None,
+                fable: None,
+                model_quotas: Vec::new(),
                 extra: None,
             },
             stale: false,

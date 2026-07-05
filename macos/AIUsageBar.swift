@@ -1,7 +1,7 @@
 // AIUsageBar — native SwiftUI menu bar app for ai-usagebar.
 //
 // A macOS-native counterpart to the GNOME Shell extension and Waybar widget.
-// It shows the 5-hour (session), weekly, optional Sonnet, and optional
+// It shows the 5-hour (session), weekly, optional model-specific, and optional
 // extra-usage ($) windows in the menu bar with a native dropdown built from
 // SwiftUI `Gauge`s — not Unicode text bars. Data still comes from the Rust
 // `ai-usagebar` binary (same vendor/OAuth/Keychain logic), so this file is a
@@ -28,6 +28,7 @@ let SETTINGS_DEFAULTS: [String: Any] = [
     "showSession": true,
     "showWeekly": true,
     "showSonnet": true,
+    "showModelQuotas": true,
     "showExtra": false,
     "colorLow": "#98c379",
     "colorMid": "#e5c07b",
@@ -38,9 +39,6 @@ let SETTINGS_DEFAULTS: [String: Any] = [
 
 var VENDOR: String { DEF.string(forKey: "vendor") ?? "anthropic" }
 var INTERVAL: Double { let v = DEF.double(forKey: "interval"); return v > 0 ? v : 30 }
-
-let FORMAT = "{plan};;{session_pct};;{session_reset};;{weekly_pct};;{weekly_reset};;" +
-             "{sonnet_pct};;{sonnet_reset};;{extra_pct};;{extra_spent};;{extra_limit}"
 
 // ─── Color helpers ───────────────────────────────────────────────────────
 func nsHexColor(_ hex: String) -> NSColor {
@@ -71,7 +69,14 @@ struct Snapshot: Equatable {
     let session: Window
     let weekly: Window
     let sonnet: Window?
+    let fable: Window?
+    let modelQuotas: [ModelQuota]
     let extra: Extra?
+    struct ModelQuota: Equatable, Identifiable {
+        var id: String { name }
+        let name: String
+        let window: Window
+    }
     struct Extra: Equatable { let pct: Int; let spent: String; let limit: String }
 }
 
@@ -81,7 +86,7 @@ func stripMarkup(_ s: String) -> String {
 
 func parse(_ text: String) -> Snapshot? {
     let f = stripMarkup(text).components(separatedBy: ";;")
-    guard f.count >= 10 else { return nil }
+    guard f.count >= 12 else { return nil }
     func unknownPlaceholder(_ s: String) -> Bool { s.hasPrefix("{") && s.hasSuffix("}") }
     func t(_ i: Int) -> String {
         let v = f[i].trimmingCharacters(in: .whitespaces)
@@ -91,13 +96,77 @@ func parse(_ text: String) -> Snapshot? {
     let sonnetReset = t(6)
     let sonnet = sonnetReset.isEmpty || sonnetReset == "—"
         ? nil : n(5).map { Window(pct: $0, reset: sonnetReset) }
-    let spent = t(8), limit = t(9)
+    let fableReset = t(8)
+    let fable = fableReset.isEmpty || fableReset == "—"
+        ? nil : n(7).map { Window(pct: $0, reset: fableReset) }
+    let spent = t(10), limit = t(11)
     let extra: Snapshot.Extra? = (spent.isEmpty || limit.isEmpty)
-        ? nil : n(7).map { Snapshot.Extra(pct: $0, spent: spent, limit: limit) }
+        ? nil : n(9).map { Snapshot.Extra(pct: $0, spent: spent, limit: limit) }
     return Snapshot(plan: t(0),
                     session: Window(pct: n(1) ?? 0, reset: t(2)),
                     weekly: Window(pct: n(3) ?? 0, reset: t(4)),
                     sonnet: sonnet,
+                    fable: fable,
+                    modelQuotas: fable.map { [Snapshot.ModelQuota(name: "Fable", window: $0)] } ?? [],
+                    extra: extra)
+}
+
+func countdown(_ iso: String?) -> String {
+    guard let iso, !iso.isEmpty else { return "" }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let date = formatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+    guard let date else { return "" }
+    let seconds = max(0, Int(date.timeIntervalSinceNow))
+    let days = seconds / 86400
+    let hours = (seconds % 86400) / 3600
+    let minutes = (seconds % 3600) / 60
+    if days > 0 { return "\(days)d \(hours)h" }
+    if hours > 0 { return "\(hours)h \(minutes)m" }
+    return "\(minutes)m"
+}
+
+func parseJSON(_ text: String) -> Snapshot? {
+    guard let data = text.data(using: .utf8),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let snap = obj["snapshot"] as? [String: Any] else { return nil }
+
+    func int(_ value: Any?) -> Int? {
+        if let i = value as? Int { return i }
+        if let n = value as? NSNumber { return n.intValue }
+        if let s = value as? String { return Int(s) }
+        return nil
+    }
+    func window(_ dict: [String: Any]?) -> Window? {
+        guard let dict else { return nil }
+        return Window(pct: int(dict["utilization_pct"]) ?? 0,
+                      reset: countdown(dict["resets_at"] as? String))
+    }
+
+    guard let session = window(snap["session"] as? [String: Any]),
+          let weekly = window(snap["weekly"] as? [String: Any]) else { return nil }
+
+    let modelQuotas = (snap["model_quotas"] as? [[String: Any]] ?? []).compactMap { quota -> Snapshot.ModelQuota? in
+        guard let name = quota["name"] as? String,
+              !name.trimmingCharacters(in: .whitespaces).isEmpty,
+              let w = window(quota["window"] as? [String: Any]) else { return nil }
+        return Snapshot.ModelQuota(name: name, window: w)
+    }
+
+    let extraDict = snap["extra"] as? [String: Any]
+    let extra = extraDict.flatMap { e -> Snapshot.Extra? in
+        guard let pct = int(e["utilization_pct"]) else { return nil }
+        return Snapshot.Extra(pct: pct,
+                              spent: e["spent"] as? String ?? "",
+                              limit: e["limit"] as? String ?? "")
+    }
+
+    return Snapshot(plan: snap["plan"] as? String ?? "",
+                    session: session,
+                    weekly: weekly,
+                    sonnet: window(snap["sonnet"] as? [String: Any]),
+                    fable: window(snap["fable"] as? [String: Any]),
+                    modelQuotas: modelQuotas,
                     extra: extra)
 }
 
@@ -212,7 +281,7 @@ final class UsageModel: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let p = Process()
             p.executableURL = URL(fileURLWithPath: bin)
-            p.arguments = ["--vendor", vendor, "--format", FORMAT]
+            p.arguments = ["--vendor", vendor, "--json"]
             let pipe = Pipe()
             p.standardOutput = pipe
             p.standardError = FileHandle.nullDevice
@@ -232,16 +301,10 @@ final class UsageModel: ObservableObject {
 
     private func consume(_ output: String) {
         loading = false
-        guard let data = output.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let text = obj["text"] as? String else {
-            setError("invalid output from ai-usagebar")
-            return
-        }
-        guard let snap = parse(text) else {
+        guard let snap = parseJSON(output) else {
             // Transient state (Loading… / ⚠) — surface the raw text, no bars.
             snapshot = nil
-            errorText = stripMarkup(text)
+            errorText = stripMarkup(output)
             return
         }
         snapshot = snap
@@ -308,6 +371,7 @@ struct UsagePopover: View {
     @AppStorage("showSession") private var showSession = true
     @AppStorage("showWeekly") private var showWeekly = true
     @AppStorage("showSonnet") private var showSonnet = true
+    @AppStorage("showModelQuotas") private var showModelQuotas = true
     @AppStorage("showExtra") private var showExtra = false
     @AppStorage("colorLow") private var colorLow = "#98c379"
     @AppStorage("colorMid") private var colorMid = "#e5c07b"
@@ -346,6 +410,13 @@ struct UsagePopover: View {
             if showSonnet, let sn = s.sonnet {
                 WindowRow(name: "Sonnet (7d)", pct: sn.pct,
                           value: "\(sn.pct)%", reset: sn.reset, tint: tint(sn.pct))
+            }
+            if showModelQuotas {
+                ForEach(s.modelQuotas) { quota in
+                    WindowRow(name: "\(quota.name) (7d)", pct: quota.window.pct,
+                              value: "\(quota.window.pct)%", reset: quota.window.reset,
+                              tint: tint(quota.window.pct))
+                }
             }
             if showExtra, let e = s.extra {
                 WindowRow(name: "Extra usage", pct: e.pct,
@@ -421,6 +492,7 @@ struct SettingsView: View {
     @AppStorage("showSession") private var showSession = true
     @AppStorage("showWeekly") private var showWeekly = true
     @AppStorage("showSonnet") private var showSonnet = true
+    @AppStorage("showModelQuotas") private var showModelQuotas = true
     @AppStorage("showExtra") private var showExtra = false
     @AppStorage("colorLow") private var colorLow = "#98c379"
     @AppStorage("colorMid") private var colorMid = "#e5c07b"
@@ -436,6 +508,7 @@ struct SettingsView: View {
                 Toggle("Show session (5h)", isOn: $showSession)
                 Toggle("Show weekly (7d)", isOn: $showWeekly)
                 Toggle("Show Sonnet (7d)", isOn: $showSonnet)
+                Toggle("Show model quotas (7d)", isOn: $showModelQuotas)
                 Toggle("Show extra usage ($)", isOn: $showExtra)
             }
             Section("Severity colors") {

@@ -54,8 +54,18 @@ pub struct AnthropicSnapshot {
     /// Some vendors of Claude (Pro, some Max tiers) don't have a separate
     /// Sonnet bucket — in which case this is None.
     pub sonnet: Option<UsageWindow>,
+    /// Optional weekly quota for Anthropic's Fable custom model.
+    pub fable: Option<UsageWindow>,
+    /// Model-specific weekly quotas discovered from Anthropic's `limits[]`.
+    pub model_quotas: Vec<ModelQuota>,
     /// `None` when `extra_usage.is_enabled` is false or the block is absent.
     pub extra: Option<ExtraUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelQuota {
+    pub name: String,
+    pub window: UsageWindow,
 }
 
 /// "Extra usage" pay-as-you-go block (claudebar's `extra_usage`).
@@ -207,13 +217,31 @@ pub fn anthropic_severity(snap: &AnthropicSnapshot) -> crate::pacing::PaceSeveri
     {
         max = s.utilization_pct;
     }
+    if let Some(s) = &snap.fable
+        && s.utilization_pct > max
+    {
+        max = s.utilization_pct;
+    }
+    for quota in &snap.model_quotas {
+        if quota.window.utilization_pct > max {
+            max = quota.window.utilization_pct;
+        }
+    }
     // Extra usage only promotes severity if a rate-limit window is at 100%.
     let any_at_cap = snap.session.utilization_pct >= 100
         || snap.weekly.utilization_pct >= 100
         || snap
             .sonnet
             .as_ref()
-            .is_some_and(|s| s.utilization_pct >= 100);
+            .is_some_and(|s| s.utilization_pct >= 100)
+        || snap
+            .fable
+            .as_ref()
+            .is_some_and(|s| s.utilization_pct >= 100)
+        || snap
+            .model_quotas
+            .iter()
+            .any(|quota| quota.window.utilization_pct >= 100);
     if any_at_cap && let Some(extra) = snap.extra {
         let p = extra.percent();
         if p > max {
@@ -243,6 +271,8 @@ mod tests {
             session: w(s),
             weekly: w(w_),
             sonnet: sonnet.map(w),
+            fable: None,
+            model_quotas: Vec::new(),
             extra: extra.map(|(limit, spent)| ExtraUsage {
                 limit: Cents(limit),
                 spent: Cents(spent),

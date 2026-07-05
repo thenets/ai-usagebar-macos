@@ -123,6 +123,9 @@ fn anthropic_sections(
     if let Some(w) = &s.sonnet {
         push_window(&mut v, "Sonnet only", w, now, tol, false);
     }
+    if let Some(w) = &s.fable {
+        push_window(&mut v, "Fable weekly", w, now, tol, false);
+    }
     if let Some(e) = &s.extra {
         v.push(Section::Spacer);
         let pct = e.percent().clamp(0, 100) as u16;
@@ -516,8 +519,8 @@ fn render_block(f: &mut Frame, area: Rect, bubble: &BubbleTheme, label: &str, bo
 mod tests {
     use super::*;
     use crate::usage::{
-        AnthropicSnapshot, Cents, ExtraUsage, OpenAiCredits, OpenAiSnapshot, OpenAiSource,
-        OpenRouterSnapshot, UsageWindow, ZaiSnapshot,
+        AnthropicSnapshot, Cents, ExtraUsage, ModelQuota, OpenAiCredits, OpenAiSnapshot,
+        OpenAiSource, OpenRouterSnapshot, UsageWindow, ZaiSnapshot,
     };
     use chrono::TimeZone;
 
@@ -553,15 +556,28 @@ mod tests {
                 resets_at: Some(now() + chrono::Duration::hours(2)),
                 window_duration: chrono::Duration::days(7),
             }),
+            fable: Some(UsageWindow {
+                utilization_pct: 52,
+                resets_at: Some(now() + chrono::Duration::days(3)),
+                window_duration: chrono::Duration::days(7),
+            }),
+            model_quotas: vec![ModelQuota {
+                name: "Fable".into(),
+                window: UsageWindow {
+                    utilization_pct: 52,
+                    resets_at: Some(now() + chrono::Duration::days(3)),
+                    window_duration: chrono::Duration::days(7),
+                },
+            }],
             extra: Some(ExtraUsage {
                 limit: Cents(5000),
                 spent: Cents(250),
             }),
         };
         let sections = sections_for(&ready(VendorSnapshot::Anthropic(snap)), now(), 5);
-        // Title (carries "Updated …" inline now) + 4 metrics (3 windows +
-        // extra) each preceded by a Spacer. 1 + 4*2 = 9 sections.
-        assert_eq!(sections.len(), 9);
+        // Title (carries "Updated …" inline now) + 5 metrics (4 windows +
+        // extra) each preceded by a Spacer. 1 + 5*2 = 11 sections.
+        assert_eq!(sections.len(), 11);
         assert!(matches!(sections[0], Section::Title { .. }));
         // Title's right-aligned slot should carry the timestamp.
         if let Section::Title { right, .. } = &sections[0] {
@@ -573,7 +589,7 @@ mod tests {
             .iter()
             .filter(|s| matches!(s, Section::Metric { .. }))
             .count();
-        assert_eq!(metric_count, 4);
+        assert_eq!(metric_count, 5);
     }
 
     #[test]
@@ -591,6 +607,8 @@ mod tests {
                 window_duration: chrono::Duration::days(7),
             },
             sonnet: None,
+            fable: None,
+            model_quotas: Vec::new(),
             extra: None,
         };
         let sections = sections_for(&ready(VendorSnapshot::Anthropic(snap)), now(), 5);

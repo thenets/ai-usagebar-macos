@@ -127,7 +127,7 @@ The engine binaries also work standalone on macOS:
 
 ```bash
 ai-usagebar --vendor anthropic --pretty    # human-readable usage in the terminal
-ai-usagebar --json                         # raw JSON
+ai-usagebar --vendor anthropic --json      # structured usage JSON
 ai-usagebar-tui                            # interactive multi-vendor TUI
 ```
 

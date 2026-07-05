@@ -113,7 +113,17 @@ fn build_placeholders(input: &RenderInput) -> HashMap<&'static str, String> {
         input.pace_tolerance,
     );
     let sonnet_window = snap.sonnet.as_ref();
+    let fable_window = snap.fable.as_ref();
     let sonnet = sonnet_window.map(|w| {
+        pacing::calc(
+            w.utilization_pct,
+            w.resets_at,
+            input.now,
+            w.window_duration,
+            input.pace_tolerance,
+        )
+    });
+    let fable = fable_window.map(|w| {
         pacing::calc(
             w.utilization_pct,
             w.resets_at,
@@ -127,6 +137,8 @@ fn build_placeholders(input: &RenderInput) -> HashMap<&'static str, String> {
     let weekly_color = pango::severity_color(severity_for(snap.weekly.utilization_pct), theme);
     let sonnet_color =
         sonnet_window.map(|w| pango::severity_color(severity_for(w.utilization_pct), theme));
+    let fable_color =
+        fable_window.map(|w| pango::severity_color(severity_for(w.utilization_pct), theme));
     let extra_color = snap
         .extra
         .as_ref()
@@ -135,6 +147,11 @@ fn build_placeholders(input: &RenderInput) -> HashMap<&'static str, String> {
     let session_bar = pango::progress_bar(snap.session.utilization_pct, session_color, theme, None);
     let weekly_bar = pango::progress_bar(snap.weekly.utilization_pct, weekly_color, theme, None);
     let sonnet_bar = if let (Some(w), Some(c)) = (sonnet_window, sonnet_color) {
+        pango::progress_bar(w.utilization_pct, c, theme, None)
+    } else {
+        String::new()
+    };
+    let fable_bar = if let (Some(w), Some(c)) = (fable_window, fable_color) {
         pango::progress_bar(w.utilization_pct, c, theme, None)
     } else {
         String::new()
@@ -184,6 +201,26 @@ fn build_placeholders(input: &RenderInput) -> HashMap<&'static str, String> {
         ),
         ("sonnet_bar", sonnet_bar.clone()),
         (
+            "fable_pct",
+            fable_window
+                .map(|w| w.utilization_pct.to_string())
+                .unwrap_or_else(|| "0".into()),
+        ),
+        (
+            "fable_reset",
+            fable_window
+                .map(|w| countdown::format(w.resets_at, input.now))
+                .unwrap_or_else(|| "—".into()),
+        ),
+        (
+            "fable_elapsed",
+            fable
+                .as_ref()
+                .map(|s| s.elapsed_pct.to_string())
+                .unwrap_or_else(|| "0".into()),
+        ),
+        ("fable_bar", fable_bar.clone()),
+        (
             "extra_spent",
             snap.extra
                 .map(|e| e.spent.fmt_dollars())
@@ -214,6 +251,17 @@ fn build_placeholders(input: &RenderInput) -> HashMap<&'static str, String> {
         insert_pace(
             &mut v,
             "sonnet",
+            &pacing::Pacing::neutral(),
+            input.format_pace_color,
+            theme,
+        );
+    }
+    if let Some(sp) = fable.as_ref() {
+        insert_pace(&mut v, "fable", sp, input.format_pace_color, theme);
+    } else {
+        insert_pace(
+            &mut v,
+            "fable",
             &pacing::Pacing::neutral(),
             input.format_pace_color,
             theme,
@@ -270,6 +318,14 @@ fn insert_pace(
             ("sonnet_pace_pts", wrap(pts)),
             ("sonnet_pace_delta", wrap(&delta)),
             ("sonnet_pace_abs_delta", wrap(&abs_delta)),
+        ],
+        "fable" => [
+            ("fable_pace", wrap(pace_glyph)),
+            ("fable_pace_indicator", wrap(indicator_glyph)),
+            ("fable_pace_pct", wrap(pct)),
+            ("fable_pace_pts", wrap(pts)),
+            ("fable_pace_delta", wrap(&delta)),
+            ("fable_pace_abs_delta", wrap(&abs_delta)),
         ],
         _ => return,
     };
@@ -403,6 +459,41 @@ fn render_default_tooltip(input: &RenderInput) -> String {
         )));
     }
 
+    if let Some(fw) = snap.fable.as_ref() {
+        let fable_color = pango::severity_color(severity_for(fw.utilization_pct), theme);
+        let fable_pacing = pacing::calc(
+            fw.utilization_pct,
+            fw.resets_at,
+            input.now,
+            fw.window_duration,
+            input.pace_tolerance,
+        );
+        let fable_bar = if input.tooltip_pace_pts {
+            pango::progress_bar(
+                fw.utilization_pct,
+                fable_color,
+                theme,
+                Some(fable_pacing.elapsed_pct),
+            )
+        } else {
+            pango::progress_bar(fw.utilization_pct, fable_color, theme, None)
+        };
+        lines.push(Line::Body("".into()));
+        lines.push(Line::Body(format!(
+            " <span foreground='{fg}'>  󱚣  Fable weekly</span>"
+        )));
+        lines.push(Line::Body(format!(
+            "   {bar}  <span font_weight='bold' foreground='{color}'>{pct}%</span>",
+            bar = fable_bar,
+            color = fable_color,
+            pct = fw.utilization_pct
+        )));
+        lines.push(Line::Body(format!(
+            " <span foreground='{dim}'>  ⏱  Resets in {cd}</span>",
+            cd = escape(&countdown::format(fw.resets_at, input.now))
+        )));
+    }
+
     if let Some(extra) = snap.extra {
         let extra_color = pango::severity_color(severity_for(extra.percent()), theme);
         let extra_bar = pango::progress_bar(extra.percent(), extra_color, theme, None);
@@ -487,7 +578,7 @@ fn wrap_words(s: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::anthropic::fetch::FetchOutcome;
-    use crate::usage::{AnthropicSnapshot, Cents, ExtraUsage, UsageWindow};
+    use crate::usage::{AnthropicSnapshot, Cents, ExtraUsage, ModelQuota, UsageWindow};
     use chrono::TimeZone;
 
     fn now() -> DateTime<Utc> {
@@ -510,11 +601,21 @@ mod tests {
             resets_at: Some(now() + chrono::Duration::hours(2) + chrono::Duration::minutes(24)),
             window_duration: chrono::Duration::days(7),
         };
+        let fable = UsageWindow {
+            utilization_pct: 52,
+            resets_at: Some(now() + chrono::Duration::days(3)),
+            window_duration: chrono::Duration::days(7),
+        };
         let snap = AnthropicSnapshot {
             plan: "Max 5x".into(),
             session,
             weekly,
             sonnet: Some(sonnet),
+            fable: Some(fable.clone()),
+            model_quotas: vec![ModelQuota {
+                name: "Fable".into(),
+                window: fable,
+            }],
             extra: Some(ExtraUsage {
                 limit: Cents(5000),
                 spent: Cents(250),
@@ -592,6 +693,7 @@ mod tests {
         assert!(out.tooltip.contains("Session"));
         assert!(out.tooltip.contains("Weekly"));
         assert!(out.tooltip.contains("Sonnet only"));
+        assert!(out.tooltip.contains("Fable weekly"));
         assert!(out.tooltip.contains("Extra usage"));
         assert!(out.tooltip.contains("Updated"));
         assert!(out.tooltip.contains("62%"));
@@ -604,10 +706,12 @@ mod tests {
     fn tooltip_omits_sonnet_and_extra_when_absent() {
         let mut oc = sample_outcome();
         oc.snapshot.sonnet = None;
+        oc.snapshot.fable = None;
         oc.snapshot.extra = None;
         let theme = Theme::default();
         let out = render_anthropic(&input(&oc, &theme));
         assert!(!out.tooltip.contains("Sonnet only"));
+        assert!(!out.tooltip.contains("Fable weekly"));
         assert!(!out.tooltip.contains("Extra usage"));
         // Still contains the basics.
         assert!(out.tooltip.contains("Session"));

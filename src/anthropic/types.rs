@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::usage::{AnthropicSnapshot, Cents, ExtraUsage, UsageWindow};
+use crate::usage::{AnthropicSnapshot, Cents, ExtraUsage, ModelQuota, UsageWindow};
 
 /// Top-level response from `GET /api/oauth/usage`.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
@@ -19,7 +19,34 @@ pub struct UsageResponse {
     #[serde(default)]
     pub seven_day_sonnet: Option<Window>,
     #[serde(default)]
+    pub limits: Vec<Limit>,
+    #[serde(default)]
     pub extra_usage: Option<ExtraUsageBlock>,
+}
+
+/// Newer Anthropic responses expose model-specific weekly quotas in `limits`.
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+pub struct Limit {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default, deserialize_with = "de_f64_or_null")]
+    pub percent: f64,
+    #[serde(default)]
+    pub resets_at: Option<String>,
+    #[serde(default)]
+    pub scope: Option<LimitScope>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+pub struct LimitScope {
+    #[serde(default)]
+    pub model: Option<LimitModel>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+pub struct LimitModel {
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 /// A single usage window — `utilization` is `0..=100` (integer percent).
@@ -67,6 +94,22 @@ where
     }
 }
 
+fn de_f64_or_null<'de, D>(d: D) -> std::result::Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::Null => Ok(0.0),
+        serde_json::Value::Number(n) => n
+            .as_f64()
+            .ok_or_else(|| serde::de::Error::custom("number out of f64 range")),
+        other => Err(serde::de::Error::custom(format!(
+            "expected number or null, got {other:?}"
+        ))),
+    }
+}
+
 impl UsageResponse {
     /// Lift the wire response into our canonical [`AnthropicSnapshot`].
     ///
@@ -97,6 +140,11 @@ impl UsageResponse {
             }
         }
 
+        let model_quotas = self.model_quotas(WEEKLY);
+        let fable = model_quotas
+            .iter()
+            .find(|quota| quota.name.eq_ignore_ascii_case("fable"))
+            .map(|quota| quota.window.clone());
         let session = to_window(self.five_hour, SESSION);
         let weekly = to_window(self.seven_day, WEEKLY);
         let sonnet = self.seven_day_sonnet.map(|w| to_window(Some(w), WEEKLY));
@@ -113,8 +161,42 @@ impl UsageResponse {
             session,
             weekly,
             sonnet,
+            fable,
+            model_quotas,
             extra,
         }
+    }
+
+    fn model_quotas(&self, dur: chrono::Duration) -> Vec<ModelQuota> {
+        self.limits
+            .iter()
+            .filter_map(|limit| {
+                if limit.kind != "weekly_scoped" {
+                    return None;
+                }
+                let name = limit
+                    .scope
+                    .as_ref()
+                    .and_then(|scope| scope.model.as_ref())
+                    .and_then(|model| model.display_name.as_deref())?
+                    .trim();
+                if name.is_empty() {
+                    return None;
+                }
+                Some(ModelQuota {
+                    name: name.to_string(),
+                    window: UsageWindow {
+                        utilization_pct: limit.percent.round() as i32,
+                        resets_at: limit
+                            .resets_at
+                            .as_deref()
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.with_timezone(&chrono::Utc)),
+                        window_duration: dur,
+                    },
+                })
+            })
+            .collect()
     }
 }
 
@@ -135,6 +217,7 @@ mod tests {
         assert_eq!(snap.session.utilization_pct, 43); // rounded
         assert_eq!(snap.weekly.utilization_pct, 27);
         assert_eq!(snap.sonnet.as_ref().unwrap().utilization_pct, 4);
+        assert!(snap.fable.is_none());
         assert_eq!(snap.extra.unwrap().limit.0, 5000);
         assert_eq!(snap.extra.unwrap().spent.0, 250);
         assert!(snap.session.resets_at.is_some());
@@ -149,7 +232,38 @@ mod tests {
         let resp: UsageResponse = serde_json::from_str(raw).unwrap();
         let snap = resp.into_snapshot("Pro".into());
         assert!(snap.sonnet.is_none());
+        assert!(snap.fable.is_none());
         assert!(snap.extra.is_none());
+    }
+
+    #[test]
+    fn parses_fable_weekly_quota_from_limits() {
+        let raw = r#"{
+            "five_hour": {"utilization": 10},
+            "seven_day": {"utilization": 20},
+            "limits": [
+                {
+                    "kind": "weekly_scoped",
+                    "percent": 52,
+                    "resets_at": "2026-07-07T15:00:00.009272+00:00",
+                    "scope": {
+                        "model": {
+                            "id": null,
+                            "display_name": "Fable"
+                        },
+                        "surface": null
+                    }
+                }
+            ]
+        }"#;
+        let resp: UsageResponse = serde_json::from_str(raw).unwrap();
+        let snap = resp.into_snapshot("Max 5x".into());
+        let fable = snap.fable.as_ref().unwrap();
+        assert_eq!(fable.utilization_pct, 52);
+        assert!(fable.resets_at.is_some());
+        assert_eq!(fable.window_duration, chrono::Duration::days(7));
+        assert_eq!(snap.model_quotas.len(), 1);
+        assert_eq!(snap.model_quotas[0].name, "Fable");
     }
 
     #[test]
