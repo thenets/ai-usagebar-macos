@@ -339,7 +339,7 @@ struct MenuBarLabel: View {
             return model.errorText != nil ? "⚠" : "…"
         }
         let entries = model.snapshots.keys.sorted().compactMap { vendor -> String? in
-            guard let s = model.snapshots[vendor], s.session.pct > 0 else { return nil }
+            guard let s = model.snapshots[vendor], s.session.pct >= 2 else { return nil }
             return "\(vendorDisplayName(vendor)):\(s.session.pct)%"
         }
         if entries.isEmpty { return "Idle" }
@@ -405,20 +405,14 @@ struct UsagePopover: View {
     }
 
     @ViewBuilder private var content: some View {
-        let activeVendors = model.snapshots.keys.sorted().filter { vendor in
-            model.snapshots[vendor].map { $0.session.pct > 0 } ?? false
-        }
-        if !activeVendors.isEmpty {
-            ForEach(activeVendors, id: \.self) { key in
+        let vendors = model.snapshots.keys.sorted()
+        if !vendors.isEmpty {
+            ForEach(vendors, id: \.self) { key in
                 if let s = model.snapshots[key] {
                     vendorSection(s)
-                        .padding(.bottom, activeVendors.last == key ? 0 : 4)
+                        .padding(.bottom, vendors.last == key ? 0 : 4)
                 }
             }
-        } else if !model.snapshots.isEmpty {
-            Text("Idle")
-                .font(.headline)
-                .foregroundStyle(.secondary)
         } else if let e = model.errorText {
             Label(e, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
