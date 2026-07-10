@@ -306,11 +306,15 @@ final class UsageModel: ObservableObject {
                 guard let self else { return }
                 self.loading = false
                 if !results.isEmpty {
-                    self.snapshots = results
+                    // A transient vendor failure must not make its previously
+                    // displayed usage disappear from the menu bar.
+                    self.snapshots.merge(results) { _, latest in latest }
                     self.errorText = nil
-                } else {
+                } else if self.snapshots.isEmpty {
                     self.snapshots = [:]
                     self.errorText = lastError ?? "no data available"
+                } else {
+                    self.errorText = lastError
                 }
             }
         }
@@ -328,22 +332,87 @@ struct MenuBarLabel: View {
     @ObservedObject var model: UsageModel
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "gauge.with.dots.needle.50percent")
-            Text(text)
+        Group {
+            if model.snapshots.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "gauge.with.dots.needle.50percent")
+                    Text(model.errorText != nil ? "⚠" : "…")
+                }
+            } else if entries.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "gauge.with.dots.needle.50percent")
+                    Text("idle")
+                }
+            } else {
+                Image(nsImage: compactStatusImage)
+                    .renderingMode(.template)
+                    .accessibilityLabel(accessibilitySummary)
+            }
+        }
+        .fixedSize()
+    }
+
+    private var entries: [(vendor: String, pct: Int)] {
+        model.snapshots.keys.sorted().compactMap { vendor -> (vendor: String, pct: Int)? in
+            entry(for: vendor)
         }
     }
 
-    private var text: String {
-        if model.snapshots.isEmpty {
-            return model.errorText != nil ? "⚠" : "…"
+    private func entry(for vendor: String) -> (vendor: String, pct: Int)? {
+        guard let snapshot = model.snapshots[vendor], snapshot.session.pct >= 2 else { return nil }
+        return (vendor, snapshot.session.pct)
+    }
+
+    private var compactStatusImage: NSImage {
+        // MenuBarExtra drops later sibling views. Compose both marks and their
+        // live values into one template image so AppKit sees one label while
+        // still applying the native menu-bar tint in every state.
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.black,
+        ]
+        let markSize = CGFloat(17)
+        let markGap = CGFloat(3)
+        let separator = " · " as NSString
+        let separatorSize = separator.size(withAttributes: attributes)
+        let resources = ["anthropic": "ClaudeCodeMark", "openai": "CodexMark"]
+        let segments = entries.map { entry in
+            let text = "\(entry.pct)%" as NSString
+            let image = resources[entry.vendor].flatMap {
+                Bundle.main.url(forResource: $0, withExtension: "png")
+            }.flatMap(NSImage.init(contentsOf:))
+            return (image: image, text: text, textSize: text.size(withAttributes: attributes))
         }
-        let entries = model.snapshots.keys.sorted().compactMap { vendor -> String? in
-            guard let s = model.snapshots[vendor], s.session.pct >= 2 else { return nil }
-            return "\(vendorDisplayName(vendor)):\(s.session.pct)%"
+        let width = segments.enumerated().reduce(CGFloat.zero) { total, item in
+            let separatorWidth = item.offset == 0 ? 0 : separatorSize.width
+            return total + separatorWidth + markSize + markGap + item.element.textSize.width
         }
-        if entries.isEmpty { return "Idle" }
-        return entries.joined(separator: " · ")
+        let height = max(markSize, ceil(segments.map(\.textSize.height).max() ?? markSize))
+        let image = NSImage(size: NSSize(width: ceil(width), height: height), flipped: false) { _ in
+            var x = CGFloat.zero
+            for (index, segment) in segments.enumerated() {
+                if index > 0 {
+                    separator.draw(at: NSPoint(x: x, y: (height - separatorSize.height) / 2),
+                                   withAttributes: attributes)
+                    x += separatorSize.width
+                }
+                segment.image?.draw(in: NSRect(x: x, y: (height - markSize) / 2,
+                                               width: markSize, height: markSize))
+                x += markSize + markGap
+                segment.text.draw(at: NSPoint(x: x, y: (height - segment.textSize.height) / 2),
+                                  withAttributes: attributes)
+                x += segment.textSize.width
+            }
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+
+    private var accessibilitySummary: String {
+        entries.map { "\(vendorDisplayName($0.vendor)) \($0.pct) percent" }
+            .joined(separator: ", ")
     }
 }
 
