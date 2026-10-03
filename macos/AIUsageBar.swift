@@ -68,6 +68,7 @@ struct Snapshot: Equatable {
     let plan: String
     let session: Window
     let weekly: Window
+    let monthly: Window?
     let sonnet: Window?
     let fable: Window?
     let modelQuotas: [ModelQuota]
@@ -89,6 +90,7 @@ func vendorDisplayName(_ vendor: String) -> String {
     case "zai": return "Z.AI"
     case "openrouter": return "OpenRouter"
     case "deepseek": return "DeepSeek"
+    case "opencode": return "OpenCode Go"
     default: return vendor
     }
 }
@@ -157,6 +159,7 @@ func parseJSON(_ text: String) -> Snapshot? {
                     plan: snap["plan"] as? String ?? "",
                     session: session,
                     weekly: weekly,
+                    monthly: window(snap["monthly"] as? [String: Any]),
                     sonnet: window(snap["sonnet"] as? [String: Any]),
                     fable: window(snap["fable"] as? [String: Any]),
                     modelQuotas: modelQuotas,
@@ -242,7 +245,7 @@ final class UsageModel: ObservableObject {
 
     private var timer: Timer?
     private var started = false
-    private let vendors = ["anthropic", "openai"]
+    private let vendors = ["anthropic", "openai", "opencode"]
 
     func start() {
         guard !started else { return }
@@ -376,7 +379,7 @@ struct MenuBarLabel: View {
         let markGap = CGFloat(3)
         let separator = " · " as NSString
         let separatorSize = separator.size(withAttributes: attributes)
-        let resources = ["anthropic": "ClaudeCodeMark", "openai": "CodexMark"]
+        let resources = ["anthropic": "ClaudeCodeMark", "openai": "CodexMark", "opencode": "OpenCodeMark"]
         let segments = entries.map { entry in
             let text = "\(entry.pct)%" as NSString
             let image = resources[entry.vendor].flatMap {
@@ -506,6 +509,10 @@ struct UsagePopover: View {
             WindowRow(name: "Weekly (7d)", pct: s.weekly.pct,
                       value: "\(s.weekly.pct)%", reset: s.weekly.reset, tint: tint(s.weekly.pct))
         }
+        if showWeekly, let m = s.monthly {
+            WindowRow(name: "Monthly", pct: m.pct,
+                      value: "\(m.pct)%", reset: m.reset, tint: tint(m.pct))
+        }
         if showSonnet, let sn = s.sonnet {
             WindowRow(name: "Sonnet (7d)", pct: sn.pct,
                       value: "\(sn.pct)%", reset: sn.reset, tint: tint(sn.pct))
@@ -614,7 +621,7 @@ struct SettingsView: View {
                 HexColorPicker(title: "Critical (≥90%)", hex: $colorCritical)
             }
             Section("Data") {
-                Text("Fetching Claude + Codex usage")
+                Text("Fetching Claude, Codex + OpenCode Go usage")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Stepper("Refresh interval: \(Int(interval))s", value: $interval, in: 5...3600, step: 5)

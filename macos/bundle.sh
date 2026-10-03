@@ -21,7 +21,7 @@ cp "$DIR/$EXEC" "$APP/Contents/MacOS/$EXEC"
 
 # Vendor marks are source-controlled SVGs, rasterized for reliable AppKit
 # template rendering in the menu bar.
-for mark in ClaudeCodeMark CodexMark; do
+for mark in ClaudeCodeMark CodexMark OpenCodeMark; do
     sips -s format png "$DIR/Resources/$mark.svg" --out "$APP/Contents/Resources/$mark.png" >/dev/null
 done
 cp "$DIR/Resources/THIRD_PARTY_NOTICES.md" "$APP/Contents/Resources/"

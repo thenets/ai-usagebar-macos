@@ -208,6 +208,15 @@ async fn build_outcome(
                     .await?;
             Ok(outcome.into())
         }
+        VendorId::Opencode => {
+            let api_key = crate::opencode::creds::resolve(&config.opencode)?;
+            let cache = crate::cache::Cache::for_vendor("opencode")?;
+            let endpoints = crate::opencode::fetch::Endpoints::default();
+            let outcome =
+                crate::opencode::fetch_snapshot(client, &api_key, &cache, &endpoints, DEFAULT_TTL)
+                    .await?;
+            Ok(outcome.into())
+        }
         VendorId::Deepseek => {
             let api_key = crate::config::resolve_api_key(
                 "DeepSeek",

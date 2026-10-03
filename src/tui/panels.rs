@@ -82,6 +82,7 @@ pub fn sections_for(tab: &TabState, now: DateTime<Utc>, pace_tolerance: u32) -> 
                 VendorSnapshot::Zai(s) => zai_sections(s, now),
                 VendorSnapshot::Openrouter(s) => openrouter_sections(s),
                 VendorSnapshot::Deepseek(s) => deepseek_sections(s),
+                VendorSnapshot::Opencode(s) => opencode_sections(s, now),
             };
             // Inject the (already-absolute) fetched-at instant into the title
             // row, right-aligned. Pre-snapshotted in app::refresh_one so it
@@ -187,6 +188,30 @@ fn zai_sections(s: &crate::usage::ZaiSnapshot, now: DateTime<Utc>) -> Vec<Sectio
         push_window(&mut v, "MCP tools (monthly)", w, now, 5, false);
     }
     if s.session.is_none() && s.weekly.is_none() && s.mcp.is_none() {
+        v.push(Section::Spacer);
+        v.push(Section::Text {
+            label: "".into(),
+            value: "  no usage windows reported".into(),
+        });
+    }
+    v
+}
+
+fn opencode_sections(s: &crate::usage::OpencodeSnapshot, now: DateTime<Utc>) -> Vec<Section> {
+    let mut v = vec![Section::Title {
+        left: s.plan.clone(),
+        right: None,
+    }];
+    if let Some(w) = &s.session {
+        push_window(&mut v, "Session (5h)", w, now, 5, false);
+    }
+    if let Some(w) = &s.weekly {
+        push_window(&mut v, "Weekly", w, now, 5, false);
+    }
+    if let Some(w) = &s.monthly {
+        push_window(&mut v, "Monthly", w, now, 5, false);
+    }
+    if s.session.is_none() && s.weekly.is_none() && s.monthly.is_none() {
         v.push(Section::Spacer);
         v.push(Section::Text {
             label: "".into(),

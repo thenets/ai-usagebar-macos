@@ -8,6 +8,10 @@ Release pages: <https://github.com/thenets/ai-usagebar-macos/releases>.
 ## [Unreleased]
 
 ### Added
+- **OpenCode Go** subscription usage (`--vendor opencode`): rolling 5-hour,
+  weekly and monthly windows from `opencode.ai/zen/go/v1/usage`, shown in the
+  menu bar app next to Claude and Codex. The API key is read from where
+  `opencode auth login` stored it (no setup), or `OPENCODE_GO_API_KEY`.
 - **Native macOS menu bar app** (`macos/AIUsageBar.swift`) built with SwiftUI
   `MenuBarExtra` + `Gauge` (`.accessoryLinearCapacity`). Replaces the previous
   Unicode text-bar renderer with genuine native controls.

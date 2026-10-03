@@ -107,6 +107,7 @@ the OAuth vendors.
 |---|---|---|
 | **Anthropic (Claude)** | OAuth in the login **Keychain** (service `Claude Code-credentials`), or `~/.claude/.credentials.json` | run `claude` once |
 | OpenAI (Codex) | OAuth in `~/.codex/auth.json` | run `codex login` once |
+| **OpenCode Go** | API key `opencode auth login` stored (`~/.local/share/opencode`), or `OPENCODE_GO_API_KEY` | run `opencode auth login` once |
 | Z.AI / OpenRouter / DeepSeek | API key (env var or `~/.config/ai-usagebar/config.toml`) | set the key |
 
 > On recent Claude Code builds macOS stores the OAuth blob in the login

@@ -33,6 +33,8 @@
 //!   envelope and at least one `TOKENS_LIMIT` entry exists.
 //! - **OpenRouter**: `/credits` returns `{data:{total_credits,total_usage}}`
 //!   and `/key` returns `{data:{usage,is_free_tier}}`.
+//! - **OpenCode Go**: `/zen/go/v1/usage` returns `{usage:{rolling,weekly,
+//!   monthly}}`, each with a 0..=100 `percent` and an RFC3339 `resetsAt`.
 
 use std::time::Duration;
 
@@ -40,6 +42,7 @@ use ai_usagebar::anthropic;
 use ai_usagebar::cache::Cache;
 use ai_usagebar::error::AppError;
 use ai_usagebar::openai;
+use ai_usagebar::opencode;
 use ai_usagebar::openrouter;
 use ai_usagebar::zai;
 
@@ -233,5 +236,50 @@ async fn openrouter_live() {
         out.snapshot.total_usage,
         out.snapshot.usage_monthly,
         out.snapshot.is_free_tier,
+    );
+}
+
+#[tokio::test]
+#[ignore = "live API; run with --ignored"]
+async fn opencode_live() {
+    // Same resolution as the widget: OPENCODE_GO_API_KEY, else the key
+    // `opencode auth login` stored under ~/.local/share/opencode.
+    let api_key = opencode::creds::resolve(&Default::default())
+        .expect("OpenCode Go key: run `opencode auth login` or export OPENCODE_GO_API_KEY");
+    let cache = xdg_cache_for("opencode");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap();
+    let endpoints = opencode::fetch::Endpoints::default();
+    let out = opencode::fetch_snapshot(
+        &client,
+        &api_key,
+        &cache,
+        &endpoints,
+        Duration::from_secs(0),
+    )
+    .await
+    .expect("opencode fetch should succeed against the real API");
+
+    for (label, w) in [
+        ("rolling", &out.snapshot.session),
+        ("weekly", &out.snapshot.weekly),
+        ("monthly", &out.snapshot.monthly),
+    ] {
+        let w = w
+            .as_ref()
+            .unwrap_or_else(|| panic!("opencode.{label} missing — shape changed?"));
+        assert_pct(&format!("opencode.{label}"), w.utilization_pct);
+        assert!(
+            w.resets_at.is_some(),
+            "opencode.{label}.resetsAt missing or not RFC3339"
+        );
+    }
+    println!(
+        "✅ opencode — session={:?}%, weekly={:?}%, monthly={:?}%",
+        out.snapshot.session.as_ref().map(|w| w.utilization_pct),
+        out.snapshot.weekly.as_ref().map(|w| w.utilization_pct),
+        out.snapshot.monthly.as_ref().map(|w| w.utilization_pct),
     );
 }

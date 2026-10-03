@@ -68,6 +68,9 @@ cd macos && ./bundle.sh                # package "AI Usage Bar.app" (icon, Info.
 - **Never `env | grep …`** without a tight filter. Prefer `printenv VAR`.
 - OAuth files (`~/.claude/.credentials.json`, `~/.codex/auth.json`): `jq 'keys'`
   only.
+- OpenCode's `~/.local/share/opencode/opencode.db` holds API keys in the
+  `credential.value` column — never `SELECT value`; query `integration_id` or
+  `json_each(value)` keys only.
 
 ## What lives where
 
@@ -77,7 +80,9 @@ cd macos && ./bundle.sh                # package "AI Usage Bar.app" (icon, Info.
   binary, full install, the `.app` bundle, and the login LaunchAgent.
 - `src/active.rs` — scroll-cycle active-vendor state file.
 - `src/anthropic/`, `src/openai/`, `src/openrouter/`, `src/zai/`,
-  `src/deepseek/` — per-vendor types + fetch + render.
+  `src/deepseek/`, `src/opencode/` — per-vendor types + fetch + render.
+- `src/opencode/creds.rs` — OpenCode Go key lookup: env → config → OpenCode
+  2's SQLite `credential` table (via `/usr/bin/sqlite3`) → legacy `auth.json`.
 - `src/anthropic/keychain.rs` — macOS `security(1)` fallback when
   `~/.claude/.credentials.json` is absent (Claude Code stores the OAuth blob in
   the login Keychain). `#[cfg(target_os = "macos")]`.
@@ -95,7 +100,7 @@ cd macos && ./bundle.sh                # package "AI Usage Bar.app" (icon, Info.
 `make smoke` exercises real undocumented endpoints (Anthropic OAuth, OpenAI
 Codex OAuth, Z.AI monitor). If it fails after a vendor's response shape drifts:
 capture the actual response, update the matching `types.rs` in
-`src/{anthropic,openai,zai,openrouter,deepseek}/`, and re-run until green.
+`src/{anthropic,openai,zai,openrouter,deepseek,opencode}/`, and re-run until green.
 
 ## Gate before committing
 

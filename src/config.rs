@@ -6,6 +6,7 @@
 //! [openai]    enabled = true   # Codex OAuth from ~/.codex/auth.json
 //! [zai]       enabled = true
 //! [openrouter] enabled = true
+//! [opencode]  enabled = true   # OpenCode Go, key from `opencode auth login`
 //! ```
 //!
 //! Every field is optional with sensible defaults — missing config file is
@@ -28,6 +29,7 @@ pub struct Config {
     pub zai: ZaiConfig,
     pub openrouter: OpenRouterConfig,
     pub deepseek: DeepseekConfig,
+    pub opencode: OpencodeConfig,
 }
 
 /// UI / dispatch preferences. Currently just `primary` — which vendor the
@@ -137,6 +139,29 @@ impl Default for DeepseekConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct OpencodeConfig {
+    pub enabled: bool,
+    /// Env var name to read the key from (env wins over everything).
+    pub api_key_env: String,
+    /// Inline key. When unset, the key `opencode auth login` stored is used.
+    pub api_key: Option<String>,
+    /// Override OpenCode's data dir (defaults to `~/.local/share/opencode`).
+    pub data_dir: Option<PathBuf>,
+}
+
+impl Default for OpencodeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            api_key_env: "OPENCODE_GO_API_KEY".to_string(),
+            api_key: None,
+            data_dir: None,
+        }
+    }
+}
+
 /// Resolve an API key for a vendor: env var wins, then inline config, then
 /// a clear error naming both fields. Used by Z.AI and OpenRouter vendors.
 pub fn resolve_api_key(
@@ -188,6 +213,7 @@ impl Config {
             VendorId::Zai => self.zai.enabled,
             VendorId::Openrouter => self.openrouter.enabled,
             VendorId::Deepseek => self.deepseek.enabled,
+            VendorId::Opencode => self.opencode.enabled,
         }
     }
 
@@ -237,7 +263,8 @@ mod tests {
         assert!(c.is_enabled(VendorId::Openrouter));
         // DeepSeek requires an explicit API key, so it defaults to disabled.
         assert!(!c.is_enabled(VendorId::Deepseek));
-        assert_eq!(c.enabled_vendors().len(), 4);
+        assert!(c.is_enabled(VendorId::Opencode));
+        assert_eq!(c.enabled_vendors().len(), 5);
     }
 
     #[test]
@@ -394,6 +421,7 @@ enabled = false
                 VendorId::Openai,
                 VendorId::Zai,
                 VendorId::Openrouter,
+                VendorId::Opencode,
             ]
         );
     }

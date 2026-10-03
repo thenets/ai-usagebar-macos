@@ -8,7 +8,7 @@
 [ui]
 # Which vendor the widget shows when `--vendor` is omitted, AND which tab
 # is selected when the TUI opens. Comment out to default to Anthropic.
-# Valid: anthropic | openai | zai | openrouter | deepseek
+# Valid: anthropic | openai | zai | openrouter | deepseek | opencode
 # primary = "anthropic"
 
 [anthropic]
@@ -44,3 +44,13 @@ api_key_env = "OPENROUTER_API_KEY"
 enabled = false
 api_key_env = "DEEPSEEK_API_KEY"  # checked first; if set + non-empty, used
 # api_key = "sk-..."              # fallback; chmod 600 the file if you use it
+
+[opencode]
+# OpenCode Go subscription (rolling 5h / weekly / monthly windows).
+enabled = true
+# Credential resolution order: env var → inline api_key → the key
+# `opencode auth login` stored (~/.local/share/opencode/opencode.db, or the
+# legacy auth.json). Usually nothing to set here.
+api_key_env = "OPENCODE_GO_API_KEY"
+# api_key = "sk-..."
+# data_dir = "/Users/you/.local/share/opencode"

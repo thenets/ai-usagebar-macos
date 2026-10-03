@@ -124,6 +124,7 @@ pub enum VendorSnapshot {
     Zai(ZaiSnapshot),
     Openrouter(OpenRouterSnapshot),
     Deepseek(DeepseekSnapshot),
+    Opencode(OpencodeSnapshot),
 }
 
 /// OpenAI Codex OAuth — mirrors Anthropic's two-window + extras pattern.
@@ -170,6 +171,16 @@ pub struct ZaiSnapshot {
     pub session: Option<UsageWindow>,
     pub weekly: Option<UsageWindow>,
     pub mcp: Option<UsageWindow>,
+}
+
+/// OpenCode Go — three dollar-based windows reported as percentages:
+/// rolling 5h, weekly, monthly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpencodeSnapshot {
+    pub plan: String,
+    pub session: Option<UsageWindow>,
+    pub weekly: Option<UsageWindow>,
+    pub monthly: Option<UsageWindow>,
 }
 
 /// OpenRouter — credit balance + lifetime/daily/weekly/monthly usage from

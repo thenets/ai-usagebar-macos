@@ -15,11 +15,12 @@ use crate::config::Config;
 use crate::deepseek;
 use crate::error::{AppError, Result};
 use crate::openai;
+use crate::opencode;
 use crate::openrouter;
 use crate::theme::Theme;
 use crate::usage::{
     AnthropicSnapshot, DeepseekSnapshot, OpenAiSnapshot, OpenAiSource, OpenRouterSnapshot,
-    UsageWindow, ZaiSnapshot,
+    OpencodeSnapshot, UsageWindow, ZaiSnapshot,
 };
 use crate::vendor::{HTTP_CLIENT_TIMEOUT, RenderOpts, VendorOutcome};
 use crate::waybar::WaybarOutput;
@@ -127,6 +128,7 @@ async fn build_output(cli: &Cli) -> Result<WaybarOutput> {
         Vendor::Openai => openai_output(cli, &config).await,
         Vendor::Zai => zai_output(cli, &config).await,
         Vendor::Deepseek => deepseek_output(cli, &config).await,
+        Vendor::Opencode => opencode_output(cli, &config).await,
     }
 }
 
@@ -146,6 +148,7 @@ async fn build_json_output(cli: &Cli) -> Result<Value> {
         Vendor::Openai => openai_json(cli, &config).await,
         Vendor::Zai => zai_json(cli, &config).await,
         Vendor::Deepseek => deepseek_json(cli, &config).await,
+        Vendor::Opencode => opencode_json(cli, &config).await,
     }
 }
 
@@ -262,6 +265,23 @@ async fn deepseek_json(cli: &Cli, config: &Config) -> Result<Value> {
     ))
 }
 
+async fn opencode_json(cli: &Cli, config: &Config) -> Result<Value> {
+    let api_key = opencode::creds::resolve(&config.opencode)?;
+    let client = http_client()?;
+    let cache = vendor_cache(cli, "opencode")?;
+    let endpoints = opencode::fetch::Endpoints::default();
+    let outcome =
+        opencode::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await?;
+
+    Ok(json_output(
+        Vendor::Opencode,
+        outcome.stale,
+        outcome.last_error,
+        outcome.cache_age,
+        opencode_snapshot_json(&outcome.snapshot),
+    ))
+}
+
 async fn openai_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let client = http_client()?;
     let cache = vendor_cache(cli, "openai")?;
@@ -319,6 +339,31 @@ async fn zai_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let vendor_outcome: VendorOutcome = outcome.into();
     let opts = RenderOpts::from_cli(cli);
     Ok(zai::vendor::render(
+        &vendor_outcome,
+        &snap,
+        &theme,
+        &opts,
+        chrono::Utc::now(),
+    ))
+}
+
+async fn opencode_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
+    let api_key = opencode::creds::resolve(&config.opencode)?;
+    let client = http_client()?;
+    let cache = vendor_cache(cli, "opencode")?;
+    let endpoints = opencode::fetch::Endpoints::default();
+    let outcome =
+        match opencode::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await {
+            Ok(o) => o,
+            Err(e) if e.is_transient() => return Ok(WaybarOutput::loading(cli.icon.as_deref())),
+            Err(e) => return Err(e),
+        };
+
+    let theme = theme_from_cli(cli);
+    let snap = outcome.snapshot.clone();
+    let vendor_outcome: VendorOutcome = outcome.into();
+    let opts = RenderOpts::from_cli(cli);
+    Ok(opencode::vendor::render(
         &vendor_outcome,
         &snap,
         &theme,
@@ -553,6 +598,15 @@ fn zai_snapshot_json(snapshot: &ZaiSnapshot) -> Value {
         "session": snapshot.session.as_ref().map(usage_window_json),
         "weekly": snapshot.weekly.as_ref().map(usage_window_json),
         "mcp": snapshot.mcp.as_ref().map(usage_window_json),
+    })
+}
+
+fn opencode_snapshot_json(snapshot: &OpencodeSnapshot) -> Value {
+    json!({
+        "plan": snapshot.plan,
+        "session": snapshot.session.as_ref().map(usage_window_json),
+        "weekly": snapshot.weekly.as_ref().map(usage_window_json),
+        "monthly": snapshot.monthly.as_ref().map(usage_window_json),
     })
 }
 
